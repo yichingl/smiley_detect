@@ -1,0 +1,61 @@
+# ==========================================
+# Environments & Virtual Envs
+# ==========================================
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+pyvenv.cfg
+
+# ==========================================
+# Python Bytecode & Cache
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ==========================================
+# Local Database & SQLite Files
+# ==========================================
+*.db
+*.sqlite3
+*.sqlite
+smiley_app.db
+
+# ==========================================
+# User Uploads & Media Files
+# (Ignores actual uploaded files, keeps directory via .gitkeep)
+# ==========================================
+uploaded_images/*
+!uploaded_images/.gitkeep
+
+# ==========================================
+# Training Data & Large Datasets
+# (Optional: ignore large local dataset files if not tracked in Git)
+# ==========================================
+# training_files/*
+# !training_files/.gitkeep
+
+# ==========================================
+# IDE & Editor Specific Files
+# ==========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ==========================================
+# Diagram Backups & Local Temp Files
+# ==========================================
+*.$diagram.drawio.bkp
+*.tmp
+
+# ==========================================
+# OS Generated Files
+# ==========================================
+.DS_Store
+Thumbs.db
+ehthumbs.db

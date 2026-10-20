@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pydantic
+sqlalchemy
+python-multipart
+celery==5.3.6
+redis==5.0.2
+psycopg2-binary==2.9.13
+python-multipart==0.0.9
