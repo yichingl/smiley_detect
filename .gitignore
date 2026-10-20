@@ -52,6 +52,7 @@ training_images/*
 # ==========================================
 *.$diagram.drawio.bkp
 *.tmp
+.$diagram.drawio.dtmp
 
 # ==========================================
 # OS Generated Files
@@ -64,4 +65,3 @@ ehthumbs.db
 # Trained models
 # ==========================================
 saved_models/*
-.$diagram.drawio.dtmp
