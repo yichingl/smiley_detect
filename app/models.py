@@ -1,4 +1,4 @@
-from sqlalchemy import Column, ForeignKey, Integer, String, DateTime, Text
+from sqlalchemy import Column, Float, ForeignKey, Integer, String, DateTime, Text
 from sqlalchemy.ext.declarative import declarative_base
 import datetime
 
@@ -26,4 +26,20 @@ class InferenceTask(Base):
     task_last_updated_at = Column(DateTime, nullable=True)
     task_status = Column(String, default="PENDING") # TODO - define types for security here
     result = Column(Text, nullable=True)  # TODO - turn this into Detections table
-    image = relationship("InferenceImage", back_populates="tasks")
+    image = relationship("InferenceImage", back_populates="tasks")# Relationship to bounding box detections
+    detections = relationship("DetectionResult", back_populates="task", cascade="all, delete-orphan")
+
+class DetectionResult(Base):
+    __tablename__ = "detection_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("inference_tasks.id"), nullable=False)
+    
+    # Bounding box coordinates and confidence
+    confidence = Column(Float, nullable=False)
+    x_min = Column(Integer, nullable=False)
+    y_min = Column(Integer, nullable=False)
+    x_max = Column(Integer, nullable=False)
+    y_max = Column(Integer, nullable=False)
+
+    task = relationship("InferenceTask", back_populates="detections")

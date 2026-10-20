@@ -147,7 +147,13 @@ def get_task_by_id(db: Session, id: int) -> InferenceTask | None:
     stmt = select(InferenceTask).where(InferenceTask.id == id)
     return db.scalar(stmt)
 
-def get_task_by_guid(db: Session, guid: str) -> InferenceTask | None:
-    """ Get InferenceTask by guid """
-    stmt = select(InferenceTask).where(InferenceTask.guid == guid)
+def get_task_by_guid(db: Session, task_guid: str) -> InferenceTask | None:
+    """
+    Retrieves an InferenceTask by its GUID, eagerly loading its detection results.
+    """
+    stmt = (
+        select(InferenceTask)
+        .options(selectinload(InferenceTask.detections))
+        .where(InferenceTask.guid == task_guid)
+    )
     return db.scalar(stmt)

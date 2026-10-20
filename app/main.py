@@ -79,10 +79,23 @@ def trigger_image_processing(image_guid: str, db: Session = Depends(get_db)):
 @app.get("/task-details/{task_guid}")
 def get_task_details(task_guid: str, db: Session = Depends(get_db)):
     
-    # Check the existence of this task_guid
+    # Fetch task with eagerly loaded detections
     inference_task: InferenceTask | None = repo.get_task_by_guid(db, task_guid)
     if not inference_task:
         raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Format the related detection rows into a clean list of dictionaries
+    formatted_detections = [
+        {
+            "id": det.id,
+            "confidence": det.confidence,
+            "x_min": det.x_min,
+            "y_min": det.y_min,
+            "x_max": det.x_max,
+            "y_max": det.y_max
+        }
+        for det in inference_task.detections
+    ]
     
     return {
         "task_guid": inference_task.guid,
@@ -90,6 +103,8 @@ def get_task_details(task_guid: str, db: Session = Depends(get_db)):
         "task_status": inference_task.task_status,
         "task_init_at": inference_task.task_init_at,
         "task_last_updated_at": inference_task.task_last_updated_at,
+        "result": inference_task.result,
+        "detections": formatted_detections
     }
 
 @app.get("/images")
