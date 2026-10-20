@@ -36,8 +36,8 @@ uploaded_images/*
 # Training Data & Large Datasets
 # (Optional: ignore large local dataset files if not tracked in Git)
 # ==========================================
-!training_files/.gitkeep
-training_files/*
+!training_images/.gitkeep
+training_images/*
 
 # ==========================================
 # IDE & Editor Specific Files

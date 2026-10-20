@@ -1,6 +1,6 @@
 SHELL := powershell.exe
 
-.PHONY: venv install run worker db-refresh redis-local dev docker-up docker-down clean
+.PHONY: venv install run worker db-refresh redis-local dev docker-up docker-down clean train
 
 venv:
 	python -m venv venv
@@ -43,3 +43,11 @@ clean:
 	rm -rf venv
 	-docker stop smiley-redis
 	-docker rm smiley-redis
+
+# Model training
+# Train the proof-of-concept model using local directories
+train:
+	python -m app.training.train_model \
+		--positive-dir training_images/positive \
+		--negative-dir training_images/negative \
+		--output-path saved_models/smiley_v1.pkl
