@@ -30,9 +30,10 @@ def run_localization_inference(image_path: str) -> list[dict]:
     # 2. Open image and convert to grayscale
     img = Image.open(image_path).convert('L')
     img_width, img_height = img.size
-    # TODO - also need to resize image to the right size for this processing
     
     detections = []
+
+    # TODO - add image pyramid to handle targets that aren't the same size as the training image size
 
     # Sliding window parameters
     patch_size = 64  # Must match the training image size (64x64)
