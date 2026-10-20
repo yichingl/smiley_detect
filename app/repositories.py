@@ -128,10 +128,24 @@ def get_inference_image_by_guid(db: Session, guid: str) -> InferenceImage | None
             .where(InferenceImage.guid == guid))
     return db.scalar(stmt)
 
+def get_inference_image_by_task_id(db: Session, task_id: int) -> InferenceImage | None:
+    """ Gets the InferenceImage associated with a specific task """
+    stmt = (
+        select(InferenceImage)
+        .join(InferenceTask, InferenceTask.image_id == InferenceImage.id)
+        .where(InferenceTask.id == task_id)
+    )
+    return db.scalar(stmt)
+
 # get all records TODO paginate and filter
 def get_inference_images(db: Session):
     """ Get InferenceImages """
     return db.query(InferenceImage).all()
+
+def get_task_by_id(db: Session, id: int) -> InferenceTask | None:
+    """ Get InferenceTask by id """
+    stmt = select(InferenceTask).where(InferenceTask.id == id)
+    return db.scalar(stmt)
 
 def get_task_by_guid(db: Session, guid: str) -> InferenceTask | None:
     """ Get InferenceTask by guid """

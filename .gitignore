@@ -59,3 +59,8 @@ training_images/*
 .DS_Store
 Thumbs.db
 ehthumbs.db
+
+# ==========================================
+# Trained models
+# ==========================================
+saved_models/*
