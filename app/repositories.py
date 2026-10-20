@@ -3,6 +3,7 @@ import os
 from typing import Any, Dict, List
 from uuid import uuid4
 
+from PIL import Image
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session, selectinload
 
@@ -44,9 +45,20 @@ def create_bulk_inference_images(db: Session, files: List[UploadFile]) -> List[u
         saved_filename = f"{unique_file_id}{ext}"
         filepath = os.path.join(UPLOAD_DIR, saved_filename)
 
-        contents = file.file.read()
-        with open(filepath, "wb") as f:
-            f.write(contents)
+        try:
+            # Open image using Pillow from the uploaded file stream
+            img = Image.open(file.file)
+            
+            # Resize image in-place keeping aspect ratio (max width or height = 500px)
+            img.thumbnail((500, 500))
+            
+            # Save the processed image to disk
+            img.save(filepath)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Failed to process image '{file.filename}': {str(e)}"
+            )
 
         record = InferenceImage(
             guid=str(uuid4()),
