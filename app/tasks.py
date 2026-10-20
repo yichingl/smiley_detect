@@ -21,55 +21,91 @@ def run_localization_inference(image_path: str) -> list[dict]:
     Returns a list of dicts containing coordinates and confidence scores.
     """
     if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(f"Model artifact not found at {MODEL_PATH}. Please run 'make train' first.")
+        raise FileNotFoundError(f"Model artifact not found at {MODEL_PATH}.")
 
-    # 1. Load trained model
     with open(MODEL_PATH, "rb") as f:
         model = pickle.load(f)
         
-    # 2. Open image and convert to grayscale
-    img = Image.open(image_path).convert('L')
-    img_width, img_height = img.size
+    orig_img = Image.open(image_path).convert('L')
+    orig_width, orig_height = orig_img.size
     
     detections = []
-
-    # TODO - add image pyramid to handle targets that aren't the same size as the training image size
-
-    # Sliding window parameters
-    patch_size = 64  # Must match the training image size (64x64)
-    stride = 32      # Step size for sliding window
+    patch_size = 64
+    stride = 32
     
-    # 3. Scan image regions
-    for y in range(0, img_height - patch_size + 1, stride):
-        for x in range(0, img_width - patch_size + 1, stride):
-            # Crop patch
-            box = (x, y, x + patch_size, y + patch_size)
-            patch = img.crop(box)
+    # Define scaling factors for your image pyramid
+    # < 1.0 shrinks the image (to find large smileys)
+    # > 1.0 enlarges the image (to find small smileys)
+    scales = [0.5, 0.75, 1.0, 1.25, 1.5]
+    
+    for scale in scales:
+        # 1. Resize image for the current pyramid level
+        scaled_width = int(orig_width * scale)
+        scaled_height = int(orig_height * scale)
+        
+        # Skip if scaled image is smaller than the patch size
+        if scaled_width < patch_size or scaled_height < patch_size:
+            continue
             
-            # Flatten and reshape for model prediction
-            features = np.array(patch).flatten().reshape(1, -1)
-            
-            # Predict
-            prediction = model.predict(features)[0]
-            probabilities = model.predict_proba(features)
-            confidence = float(np.max(probabilities))
-            
-            # If classified as positive smiley with high confidence
-            if prediction == 1 and confidence >= CONFIDENCE_THRESHOLD:
-                detections.append({
-                    "x_min": x,
-                    "y_min": y,
-                    "x_max": x + patch_size,
-                    "y_max": y + patch_size,
-                    "confidence": confidence
-                })
+        scaled_img = orig_img.resize((scaled_width, scaled_height), Image.Resampling.BILINEAR)
+        
+        # 2. Run sliding window on this scaled level
+        for y in range(0, scaled_height - patch_size + 1, stride):
+            for x in range(0, scaled_width - patch_size + 1, stride):
+                box = (x, y, x + patch_size, y + patch_size)
+                patch = scaled_img.crop(box)
                 
-    # TODO Simple Non-Maximum Suppression (NMS) or overlapping filter can be added here 
-    # if multiple adjacent windows trigger on the same smiley face.
+                features = np.array(patch).flatten().reshape(1, -1)
+                prediction = model.predict(features)[0]
+                confidence = float(np.max(model.predict_proba(features)))
+                
+                if prediction == 1 and confidence >= CONFIDENCE_THRESHOLD:
+                    # 3. Map coordinates *back* to the original unscaled image space
+                    orig_x_min = int(x / scale)
+                    orig_y_min = int(y / scale)
+                    orig_x_max = int((x + patch_size) / scale)
+                    orig_y_max = int((y + patch_size) / scale)
+                    
+                    detections.append({
+                        "x_min": orig_x_min,
+                        "y_min": orig_y_min,
+                        "x_max": orig_x_max,
+                        "y_max": orig_y_max,
+                        "confidence": confidence
+                    })
+                    
+    # Apply NMS to clean up overlapping multi-scale/multi-window boxes
+    final_detections = apply_nms(detections, iou_threshold=0.3)
+    return final_detections
 
-    # TODO translate the coordinates back to the original image that haven't been resized 
-    
-    return detections
+def apply_nms(detections, iou_threshold=0.3): # TODO - this is for POC, may switch to pytorch instead
+    if not detections:
+        return []
+    # Sort by confidence descending
+    sorted_dets = sorted(detections, key=lambda d: d["confidence"], reverse=True)
+    keep = []
+
+    while sorted_dets:
+        best = sorted_dets.pop(0)
+        keep.append(best)
+        remaining = []
+        for det in sorted_dets:
+            # Calculate Intersection over Union (IoU)
+            inter_x1 = max(best["x_min"], det["x_min"])
+            inter_y1 = max(best["y_min"], det["y_min"])
+            inter_x2 = min(best["x_max"], det["x_max"])
+            inter_y2 = min(best["y_max"], det["y_max"])
+
+            inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+            best_area = (best["x_max"] - best["x_min"]) * (best["y_max"] - best["y_min"])
+            det_area = (det["x_max"] - det["x_min"]) * (det["y_max"] - det["y_min"])
+            union_area = best_area + det_area - inter_area
+
+            iou = inter_area / union_area if union_area > 0 else 0
+            if iou < iou_threshold:
+                remaining.append(det)
+        sorted_dets = remaining
+    return keep
 
 @celery_app.task(name="tasks.process_sample_image")
 def process_sample_image(task_identifier: str, task_id: int):
