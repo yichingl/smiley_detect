@@ -16,6 +16,8 @@ UPLOAD_DIR = "uploaded_images"
 # insert a new inference image
 def create_bulk_inference_images(db: Session, files: List[UploadFile]) -> List[uuid4]:
     """Validates files, saves to disk, then inserts them into the database"""
+
+    # TODO - resize the image to be within max width/height
     
     # validate inputs
     if not files:

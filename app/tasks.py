@@ -1,3 +1,5 @@
+import os
+
 from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
@@ -15,41 +17,57 @@ CONFIDENCE_THRESHOLD = 0.75
 
 def run_localization_inference(image_path: str) -> list[dict]:
     """
-    Scans the image (or uses a sliding window/detector) to find smiley bounding boxes.
+    Scans the image using a sliding window approach to find smiley bounding boxes.
     Returns a list of dicts containing coordinates and confidence scores.
     """
-    # 1. Load model
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(f"Model artifact not found at {MODEL_PATH}. Please run 'make train' first.")
+
+    # 1. Load trained model
     with open(MODEL_PATH, "rb") as f:
         model = pickle.load(f)
         
+    # 2. Open image and convert to grayscale
     img = Image.open(image_path).convert('L')
     img_width, img_height = img.size
+    # TODO - also need to resize image to the right size for this processing
     
     detections = []
+
+    # Sliding window parameters
+    patch_size = 64  # Must match the training image size (64x64)
+    stride = 32      # Step size for sliding window
     
-    # (Example Proof-of-Concept Logic: 
-    # For a full sliding window or using an object detector like YOLO/PyTorch, 
-    # you would loop through regions or get direct coordinate outputs.)
+    # 3. Scan image regions
+    for y in range(0, img_height - patch_size + 1, stride):
+        for x in range(0, img_width - patch_size + 1, stride):
+            # Crop patch
+            box = (x, y, x + patch_size, y + patch_size)
+            patch = img.crop(box)
+            
+            # Flatten and reshape for model prediction
+            features = np.array(patch).flatten().reshape(1, -1)
+            
+            # Predict
+            prediction = model.predict(features)[0]
+            probabilities = model.predict_proba(features)
+            confidence = float(np.max(probabilities))
+            
+            # If classified as positive smiley with high confidence
+            if prediction == 1 and confidence >= CONFIDENCE_THRESHOLD:
+                detections.append({
+                    "x_min": x,
+                    "y_min": y,
+                    "x_max": x + patch_size,
+                    "y_max": y + patch_size,
+                    "confidence": confidence
+                })
+                
+    # TODO Simple Non-Maximum Suppression (NMS) or overlapping filter can be added here 
+    # if multiple adjacent windows trigger on the same smiley face.
+
+    # TODO translate the coordinates back to the original image that haven't been resized 
     
-    # Mocking a detected bounding box for demonstration:
-    # If using YOLO, it directly returns boxes [x_min, y_min, x_max, y_max, confidence]
-    
-    # For now, let's simulate a detected bounding box if confidence is high:
-    sample_patch = img.resize((64, 64))
-    features = np.array(sample_patch).flatten().reshape(1, -1)
-    
-    prediction = model.predict(features)[0]
-    confidence = float(np.max(model.predict_proba(features)))
-    
-    if prediction == 1 and confidence >= CONFIDENCE_THRESHOLD:
-        detections.append({
-            "x_min": 50,
-            "y_min": 50,
-            "x_max": 150,
-            "y_max": 150,
-            "confidence": confidence
-        })
-        
     return detections
 
 @celery_app.task(name="tasks.process_sample_image")
@@ -72,11 +90,8 @@ def process_sample_image(task_identifier: str, task_id: int):
     for detection in detected_locations:
         print(detection)
 
-    # TODO filter thorugh the coordinates and remove overlapping results
-    filtered_results = detected_locations
-
     # save results to database
-    for box in filtered_results:
+    for box in detected_locations:
         db_detection = DetectionResult(
             task_id=task_id,
             confidence=box["confidence"],
