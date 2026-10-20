@@ -64,3 +64,4 @@ ehthumbs.db
 # Trained models
 # ==========================================
 saved_models/*
+.$diagram.drawio.dtmp
