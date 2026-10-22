@@ -1,6 +1,6 @@
 SHELL := powershell.exe
 
-.PHONY: venv install run worker db-refresh redis-local dev docker-up docker-down clean train
+.PHONY: venv install run worker db-refresh redis-local dev docker-up docker-down clean train train-yolo
 
 venv:
 	python -m venv venv
@@ -51,3 +51,6 @@ train:
 		--positive-dir training_images/positive \
 		--negative-dir training_images/negative \
 		--output-path saved_models/smiley_v1.pkl
+
+train-yolo:
+	python -m app.training.train_yolo --epochs 25
