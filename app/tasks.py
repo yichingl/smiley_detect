@@ -11,14 +11,11 @@ import pickle
 import numpy as np
 from PIL import Image
 
-# Hardcoded model path for the proof of concept
-MODEL_PATH = "saved_models/smiley_v1.pkl" #TODO change this from being hardcoded
-CONFIDENCE_THRESHOLD = 0.75
 
 from ultralytics import YOLO
 
 # Path to your trained YOLO weights (fallback to yolov8n.pt if custom weights aren't trained yet)
-MODEL_PATH = "saved_models/smiley_run-6/weights/best.pt"
+MODEL_PATH = "saved_models/smiley_run-7/weights/best.pt" #TODO change this from being hardcoded
 CONFIDENCE_THRESHOLD = 0.75
 
 def run_localization_inference(image_path: str) -> list[dict]:
