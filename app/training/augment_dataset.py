@@ -66,8 +66,8 @@ if __name__ == "__main__":
         else:
             pos_files.append(img_path)
             
-    print(found {len(pos_files)} positive and {len(neg_files)} negative source images.)
-    
+    print(f"Found {len(pos_files)} positive and {len(neg_files)} negative source images.")
+
     # STEP 1: Generate base labels for your original raw crops so YOLO can read them
     print("Generating labels for original raw crops...")
     for img_path in all_images:
