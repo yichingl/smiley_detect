@@ -137,8 +137,18 @@ async def get_tasks_for_image(image_guid: str, db: Session = Depends(get_db)):
     # Fetch associated tasks
     tasks = db.query(InferenceTask).filter(InferenceTask.image_id == image.id).all()
     
+    # Return list of tasks with guid, detection count, and status
+    task_list = [
+        {
+            "guid": task.guid,
+            "detection_count": len(task.detections),
+            "task_status": task.task_status
+        }
+        for task in tasks
+    ]
+    
     return {
-        "tasks": [task.guid for task in tasks]
+        "tasks": task_list
     }
 
 @app.get("/tasks/{task_guid}/rendered-image")

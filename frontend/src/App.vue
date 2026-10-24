@@ -10,12 +10,28 @@
     uploaded_at?: string
   }
 
+  interface TaskInfo {
+    guid: string
+    detection_count: number
+    task_status: string
+  }
+
+  interface Detection {
+    id: number
+    confidence: number
+    x_min: number
+    y_min: number
+    x_max: number
+    y_max: number
+  }
+
   // variables
   const images = ref<InferenceImage[]>([])
   const expandedImages = ref<Record<string, boolean>>({})
-  const imageDetails = ref<Record<string, string[]>>({})
+  const imageDetails = ref<Record<string, TaskInfo[]>>({})
 
-  // Track the selected task ID per image to switch the image source
+  // Track active detections and selected task ID per image
+  const activeDetections = ref<Record<string, Detection[]>>({})
   const activeTaskId = ref<Record<string, string>>({})
 
   // Fetch existing uploaded images on mount
@@ -63,9 +79,21 @@
     }
   }
 
-  // Select a task ID, which instantly switches the image source to the backend-rendered endpoint
-  const selectTask = (imgGuid: string, taskId: string) => {
-    activeTaskId.value[imgGuid] = taskId
+  // Fetch task details and detections when a task item is clicked
+  const selectTaskAndFetchDetections = async (imgGuid: string, task: TaskInfo) => {
+    activeTaskId.value[imgGuid] = task.guid
+    try {
+      const response = await fetch(`/task-details/${task.guid}`)
+      if (response.ok) {
+        const data = await response.json()
+        activeDetections.value[imgGuid] = data.detections || []
+      } else {
+        activeDetections.value[imgGuid] = []
+      }
+    } catch (err) {
+      console.error('Failed to fetch task detections:', err)
+      activeDetections.value[imgGuid] = []
+    }
   }
 
   onMounted(() => {
@@ -109,17 +137,26 @@
               </span>
             </div>
 
-            <!-- Expanded Details (Task IDs) -->
+            <!-- Expanded Details -->
             <div v-if="expandedImages[img.guid]" class="mt-4 pt-4 border-t border-slate-100 space-y-3" @click.stop>
               <div class="flex gap-4 items-center">
 
-                <!-- Image Preview: Automatically switches to the backend-rendered endpoint when a task is selected -->
-                <div class="relative inline-block">
-                  <img 
-                    :src="activeTaskId[img.guid] ? `/tasks/${activeTaskId[img.guid]}/rendered-image` : `/${img.filepath}`" 
-                    alt="Preview" 
-                    class="w-48 h-auto rounded-lg border border-slate-200 block" 
-                  />
+                <!-- Image Preview & 0 Detections Label -->
+                <div class="flex flex-col items-center">
+                  <div class="relative inline-block">
+                    <img 
+                      :src="activeTaskId[img.guid] ? `/tasks/${activeTaskId[img.guid]}/rendered-image` : `/${img.filepath}`" 
+                      alt="Preview" 
+                      class="w-48 h-auto rounded-lg border border-slate-200 block" 
+                    />
+                  </div>
+                  <!-- Show "0 detections" if a task is selected and detections array is empty -->
+                  <div 
+                    v-if="activeTaskId[img.guid] && activeDetections[img.guid] && activeDetections[img.guid].length === 0" 
+                    class="text-xs text-slate-500 font-medium mt-1.5"
+                  >
+                    0 detections
+                  </div>
                 </div>
 
                 <div>
@@ -135,23 +172,31 @@
                 </div>
               </div>
 
-              <!-- Associated Task IDs List -->
+              <!-- Associated Tasks List with Status and Count -->
               <div>
-                <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Associated Task IDs (Click to View Rendered Boxes)</h4>
+                <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Associated Tasks (Click to View)</h4>
                 <div v-if="!imageDetails[img.guid] || imageDetails[img.guid].length === 0" class="text-xs text-slate-400 italic">
                   No tasks associated with this image yet.
                 </div>
-                <ul v-else class="space-y-1">
+                <ul v-else class="space-y-1.5">
                   <li 
-                    v-for="taskId in imageDetails[img.guid]" 
-                    :key="taskId" 
-                    @click="selectTask(img.guid, taskId)"
+                    v-for="task in imageDetails[img.guid]" 
+                    :key="task.guid" 
+                    @click="selectTaskAndFetchDetections(img.guid, task)"
                     :class="[
-                      'text-xs font-mono px-2 py-1 rounded cursor-pointer transition',
-                      activeTaskId[img.guid] === taskId ? 'bg-blue-100 text-blue-800 font-bold' : 'text-slate-700 hover:bg-slate-100'
+                      'text-xs font-mono px-3 py-2 rounded cursor-pointer transition flex justify-between items-center',
+                      activeTaskId[img.guid] === task.guid ? 'bg-blue-100 text-blue-900 font-bold border border-blue-300' : 'text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200'
                     ]"
                   >
-                    {{ taskId }}
+                    <span>{{ task.guid }}</span>
+                    <div class="flex gap-2 items-center">
+                      <span class="px-1.5 py-0.5 bg-white rounded text-[10px] border border-slate-300 font-sans">
+                        Status: {{ task.task_status }}
+                      </span>
+                      <span class="px-1.5 py-0.5 bg-slate-200 rounded text-[10px] font-sans">
+                        Detections: {{ task.detection_count }}
+                      </span>
+                    </div>
                   </li>
                 </ul>
               </div>
