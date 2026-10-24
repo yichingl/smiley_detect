@@ -15,6 +15,11 @@ export default defineConfig({
       '/images': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+      },
+      // proxy rule for serving uploaded images
+      '/uploaded_images': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
       }
     }
   }

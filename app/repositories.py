@@ -43,7 +43,8 @@ def create_bulk_inference_images(db: Session, files: List[UploadFile]) -> List[u
         unique_file_id = str(uuid4())
         ext = os.path.splitext(file.filename)[1]
         saved_filename = f"{unique_file_id}{ext}"
-        filepath = os.path.join(UPLOAD_DIR, saved_filename)
+        # Replace backslashes with forward slashes for web compatibility
+        filepath = os.path.join(UPLOAD_DIR, saved_filename).replace("\\", "/")
 
         try:
             # Open image using Pillow from the uploaded file stream
@@ -62,7 +63,7 @@ def create_bulk_inference_images(db: Session, files: List[UploadFile]) -> List[u
 
         record = InferenceImage(
             guid=str(uuid4()),
-            name=file.filename,
+            name=saved_filename,
             filepath=filepath,
             upload_group_id=upload_group_id
         )

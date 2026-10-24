@@ -2,30 +2,43 @@ from contextlib import asynccontextmanager
 from typing import List
 
 from uuid import uuid4
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Depends
 from app.database import get_db, init_db
 from app.models import InferenceImage, InferenceTask
 import app.repositories as repo
 import app.tasks as tasks
-
-app = FastAPI(
-    title="SmileyDetect API",
-    description ="API for classifying and localizing smiley faces",
-    version="1.0.0"
-)
-
-# Define the lifespan context manager
+from pathlib import Path
+# 1. Define the lifespan context manager first
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup Logic ---
-    init_db()  # Creates the database and tables (like smiley_app.db) on startup
+    init_db()  # Creates the database and tables on startup
     yield
     # --- Shutdown Logic (optional) ---
-    # Put any cleanup code here if needed when the app stops
 
-# Pass the lifespan function into your FastAPI application instance
-app = FastAPI(lifespan=lifespan)
+# 2. Initialize FastAPI ONCE with metadata and the lifespan
+app = FastAPI(
+    title="SmileyDetect API",
+    description="API for classifying and localizing smiley faces",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# 3. Establish the absolute path to your project root
+BASE_DIR = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = BASE_DIR / "uploaded_images"
+
+# 4. Ensure the directory physically exists
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# 5. Mount static files using the absolute path string
+app.mount(
+    "/uploaded_images",
+    StaticFiles(directory=str(UPLOAD_DIR)),
+    name="uploaded_images"
+)
 
 # Welcome message
 @app.get("/")
@@ -111,3 +124,17 @@ def get_task_details(task_guid: str, db: Session = Depends(get_db)):
 def get_images(db: Session = Depends(get_db)): # TODO paginate and filter
     db_result: List[InferenceImage] | None = repo.get_inference_images(db)
     return db_result
+
+@app.get("/images/{image_guid}/tasks")
+async def get_tasks_for_image(image_guid: str, db: Session = Depends(get_db)):
+    # Query database for image by guid
+    image = db.query(InferenceImage).filter(InferenceImage.guid == image_guid).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Fetch associated tasks
+    tasks = db.query(InferenceTask).filter(InferenceTask.image_id == image.id).all()
+    
+    return {
+        "tasks": [task.guid for task in tasks]
+    }
