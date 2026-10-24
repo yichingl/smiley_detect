@@ -2,14 +2,16 @@ from contextlib import asynccontextmanager
 from typing import List
 
 from uuid import uuid4
+import cv2
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Depends
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, Depends
 from app.database import get_db, init_db
 from app.models import InferenceImage, InferenceTask
 import app.repositories as repo
 import app.tasks as tasks
 from pathlib import Path
+
 # 1. Define the lifespan context manager first
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -138,3 +140,41 @@ async def get_tasks_for_image(image_guid: str, db: Session = Depends(get_db)):
     return {
         "tasks": [task.guid for task in tasks]
     }
+
+@app.get("/tasks/{task_guid}/rendered-image")
+def get_rendered_image(task_guid: str, db: Session = Depends(get_db)):
+    # 1. Retrieve the task and its related image/detections using your repository
+    task = repo.get_task_by_guid(db, task_guid)
+    if not task or not task.image:
+        raise HTTPException(status_code=404, detail="Task or image not found")
+    
+    # 2. Resolve the full absolute path to the image on disk
+    image_path = BASE_DIR / task.image.filepath
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Image file not found on disk")
+
+    # 3. Read the image using OpenCV
+    img = cv2.imread(str(image_path))
+    if img is None:
+        raise HTTPException(status_code=500, detail="Failed to decode image")
+
+    # 4. Loop through each detection and draw the bounding box & confidence label
+    for det in task.detections:
+        pt1 = (int(det.x_min), int(det.y_min))
+        pt2 = (int(det.x_max), int(det.y_max))
+        
+        # Draw red rectangle (OpenCV uses BGR: Blue=0, Green=0, Red=255)
+        cv2.rectangle(img, pt1, pt2, (0, 0, 255), 2)
+        
+        # Format and draw the confidence label above the box
+        label = f"{det.confidence * 100:.1f}%"
+        text_pos = (pt1[0], max(pt1[1] - 8, 15))
+        cv2.putText(img, label, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+    # 5. Encode the processed image back into bytes (JPEG format)
+    success, encoded_image = cv2.imencode('.jpg', img)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to encode processed image")
+
+    # 6. Return the image directly as an HTTP response
+    return Response(content=encoded_image.tobytes(), media_type="image/jpeg")

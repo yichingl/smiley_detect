@@ -11,3 +11,4 @@ Pillow>=10.0.0
 numpy>=1.26.0
 scikit-learn>=1.4.0
 ultralytics>=8.0.0
+opencv-python
