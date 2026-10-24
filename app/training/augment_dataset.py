@@ -3,8 +3,6 @@ import random
 import glob
 from PIL import Image
 
-# to run, call at root: python -m app.training.augment_dataset
-
 def augment_and_place(image_path, bg_size=1000):
     """Loads a tight crop, scales, rotates, and places it randomly on a background canvas."""
     img = Image.open(image_path).convert("L")
@@ -43,61 +41,73 @@ def augment_and_place(image_path, bg_size=1000):
     return bg, x_center, y_center, width, height
 
 if __name__ == "__main__":
-    # Define your source directories containing your original crops
-    pos_src_dir = r"C:\Users\PC\SmileyDetect\training_files\positive"
-    neg_src_dir = r"C:\Users\PC\SmileyDetect\training_files\negative"
-    
-    # YOLO dataset destination directories
+    # Your directories
     img_train_dir = r"C:\Users\PC\SmileyDetect\dataset\images\train"
     lbl_train_dir = r"C:\Users\PC\SmileyDetect\dataset\labels\train"
     
-    os.makedirs(img_train_dir, exist_ok=True)
     os.makedirs(lbl_train_dir, exist_ok=True)
     
-    # Gather source images
-    pos_files = glob.glob(os.path.join(pos_src_dir, "*.JPG")) + glob.glob(os.path.join(pos_src_dir, "*.jpg"))
-    neg_files = glob.glob(os.path.join(neg_src_dir, "*.JPG")) + glob.glob(os.path.join(neg_src_dir, "*.jpg"))
+    # Gather all images currently in the train folder
+    all_images = glob.glob(os.path.join(img_train_dir, "*.JPG")) + glob.glob(os.path.join(img_train_dir, "*.jpg"))
     
-    if not pos_files:
-        print(f"Error: No positive images found in {pos_src_dir} (Expected 1.JPG to 48.JPG)")
-        exit(1)
-    if not neg_files:
-        print(f"Error: No negative images found in {neg_src_dir} (Expected n1.JPG to n35.JPG)")
+    if not all_images:
+        print(f"Error: No images found in {img_train_dir}!")
         exit(1)
         
-    # Set how many augmented variations you want to generate for each set
-    num_pos_to_generate = 100  # Generates 100 positive training samples
-    num_neg_to_generate = 100  # Generates 100 negative training samples
+    pos_files = []
+    neg_files = []
     
-    print(f"Generating {num_pos_to_generate} augmented positive samples...")
-    for i in range(num_pos_to_generate):
+    # Separate positives and negatives based on filename
+    for img_path in all_images:
+        filename = os.path.basename(img_path)
+        # If filename starts with 'n' or 'N', treat as negative
+        if filename.lower().startswith('n'):
+            neg_files.append(img_path)
+        else:
+            pos_files.append(img_path)
+            
+    print(found {len(pos_files)} positive and {len(neg_files)} negative source images.)
+    
+    # STEP 1: Generate base labels for your original raw crops so YOLO can read them
+    print("Generating labels for original raw crops...")
+    for img_path in all_images:
+        filename = os.path.basename(img_path)
+        base_name, _ = os.path.splitext(filename)
+        lbl_path = os.path.join(lbl_train_dir, f"{base_name}.txt")
+        
+        if filename.lower().startswith('n'):
+            # Negative image -> empty label file
+            open(lbl_path, "w").close()
+        else:
+            # Positive tight crop -> full frame bounding box
+            with open(lbl_path, "w") as f:
+                f.write("0 0.5 0.5 1.0 1.0\n")
+                
+    # STEP 2: Generate augmented variations (scale, rotate, random placement)
+    num_pos_aug = 100  # Number of augmented positive images to create
+    num_neg_aug = 100  # Number of augmented negative images to create
+    
+    print(f"Generating {num_pos_aug} augmented positive samples...")
+    for i in range(num_pos_aug):
+        if not pos_files: break
         src_file = random.choice(pos_files)
         bg, xc, yc, w, h = augment_and_place(src_file)
         if bg is None: continue
         
-        filename = f"pos_aug_{i:03d}"
-        img_path = os.path.join(img_train_dir, f"{filename}.jpg")
-        lbl_path = os.path.join(lbl_train_dir, f"{filename}.txt")
-        
-        bg.save(img_path)
-        # Write valid YOLO bounding box for positives
-        with open(lbl_path, "w") as f:
+        name = f"aug_pos_{i:03d}"
+        bg.save(os.path.join(img_train_dir, f"{name}.jpg"))
+        with open(os.path.join(lbl_train_dir, f"{name}.txt"), "w") as f:
             f.write(f"0 {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}\n")
             
-    print(f"Generating {num_neg_to_generate} augmented negative samples...")
-    for i in range(num_neg_to_generate):
+    print(f"Generating {num_neg_aug} augmented negative samples...")
+    for i in range(num_neg_aug):
+        if not neg_files: break
         src_file = random.choice(neg_files)
         bg, xc, yc, w, h = augment_and_place(src_file)
         if bg is None: continue
         
-        filename = f"neg_aug_{i:03d}"
-        img_path = os.path.join(img_train_dir, f"{filename}.jpg")
-        lbl_path = os.path.join(lbl_train_dir, f"{filename}.txt")
+        name = f"aug_neg_{i:03d}"
+        bg.save(os.path.join(img_train_dir, f"{name}.jpg"))
+        open(os.path.join(lbl_train_dir, f"{name}.txt"), "w").close()
         
-        bg.save(img_path)
-        # Write an completely empty .txt file (0 bytes) for negatives[cite: 3]
-        open(lbl_path, "w").close()
-        
-    print("Success! Both positive and negative sets have been augmented and saved to:")
-    print(f" - Images: {img_train_dir}")
-    print(f" - Labels: {lbl_train_dir}")
+    print("Success! All original crops are labeled, and augmented samples have been added.")
