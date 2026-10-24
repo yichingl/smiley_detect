@@ -27,6 +27,19 @@
     }
   }
 
+  // start a task for the image guid
+  const startTaskOnImage = async(image_guid: string) => {
+    
+    try {
+      const response = await fetch(`/process-image/${image_guid}`, { method: 'POST' });
+      if (!response.ok) {
+  throw new Error(`Server returned status ${response.status}`);
+}
+    } catch (err) {
+      console.error('Failed to start processing on image:', err)
+    }
+  }
+
   // fetch contents for an expanded image
   const toggleExpand = async (img: InferenceImage) => {
 
@@ -95,6 +108,7 @@
             <div v-if="expandedImages[img.guid]" class="mt-4 pt-4 border-t border-slate-100 space-y-3" @click.stop>
               <div class="flex gap-4 items-center">
                 <img :src="`/${img.filepath}`" alt="Preview" class="w-24 h-24 object-cover rounded-lg border border-slate-200" />
+                <div><button @click="startTaskOnImage(img.guid)">Start Task</button></div>
                 <div>
                   <p class="text-xs text-slate-500"><span class="font-semibold">GUID:</span> {{ img.guid }}</p>
                   <p class="text-xs text-slate-500 mt-1"><span class="font-semibold">Group ID:</span> {{ img.upload_group_id }}</p>
