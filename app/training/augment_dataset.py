@@ -80,8 +80,8 @@ if __name__ == "__main__":
                 f.write("0 0.5 0.5 1.0 1.0\n")
                 
     # STEP 2: Generate augmented variations (scale, mirror, random placement)
-    num_pos_aug = 200
-    num_neg_aug = 200
+    num_pos_aug = 450
+    num_neg_aug = 450
     
     print(f"Generating {num_pos_aug} augmented positive samples (with mirroring)...")
     for i in range(num_pos_aug):
