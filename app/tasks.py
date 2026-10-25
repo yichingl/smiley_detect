@@ -15,7 +15,7 @@ from PIL import Image
 from ultralytics import YOLO
 
 # Path to your trained YOLO weights (fallback to yolov8n.pt if custom weights aren't trained yet)
-MODEL_PATH = "saved_models/smiley_run-7/weights/best.pt" #TODO change this from being hardcoded
+MODEL_PATH = "saved_models/smiley_run-9/weights/best.pt" #TODO change this from being hardcoded
 CONFIDENCE_THRESHOLD = 0.75
 
 def run_localization_inference(image_path: str) -> list[dict]:

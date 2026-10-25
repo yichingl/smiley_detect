@@ -34,7 +34,13 @@
   const activeDetections = ref<Record<string, Detection[]>>({})
   const activeTaskId = ref<Record<string, string>>({})
 
-  // Fetch existing uploaded images on mount
+  // Upload state variables
+  const fileInput = ref<HTMLInputElement | null>(null)
+  const selectedFile = ref<File | null>(null)
+  const isUploading = ref(false)
+  const uploadMessage = ref('')
+
+  // Fetch existing uploaded images on mount / refresh
   const fetchImages = async () => {
     try {
       const response = await fetch('/images')
@@ -46,36 +52,88 @@
     }
   }
 
-  // Start a task for the image guid
-  const startTaskOnImage = async (image_guid: string) => {
-    try {
-      const response = await fetch(`/process-image/${image_guid}`, { method: 'POST' })
-      if (!response.ok) {
-        throw new Error(`Server returned status ${response.status}`)
-      }
-    } catch (err) {
-      console.error('Failed to start processing on image:', err)
+  // Handle file selection
+  const handleFileChange = (event: Event) => {
+    const target = event.target as HTMLInputElement
+    if (target.files && target.files[0]) {
+      selectedFile.value = target.files[0]
     }
   }
 
-  // Fetch contents for an expanded image
+  // Upload single image via /upload-single-image/
+  const uploadImage = async () => {
+    if (!selectedFile.value) {
+      uploadMessage.value = 'Please select a file first!'
+      return
+    }
+
+    const formData = new FormData()
+    formData.append('file', selectedFile.value)
+
+    isUploading.value = true
+    uploadMessage.value = ''
+
+    try {
+      const response = await fetch('/upload-single-image/', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error('Upload failed')
+      }
+
+      uploadMessage.value = 'Image uploaded successfully!'
+      selectedFile.value = null
+      if (fileInput.value) fileInput.value.value = ''
+
+      // Refresh images list automatically after upload
+      await fetchImages()
+    } catch (err) {
+      uploadMessage.value = 'Error uploading image. Please try again.'
+      console.error(err)
+    } finally {
+      isUploading.value = false
+    }
+  }
+
+  // Fetch tasks for a specific image GUID (used for initial expansion and manual refresh)
+  const fetchTasksForImage = async (imgGuid: string) => {
+    try {
+      const response = await fetch(`/images/${imgGuid}/tasks`)
+      if (response.ok) {
+        const data = await response.json()
+        imageDetails.value[imgGuid] = data.tasks || []
+      } else {
+        imageDetails.value[imgGuid] = []
+      }
+    } catch (err) {
+      console.error('Failed to fetch tasks for image', err)
+      imageDetails.value[imgGuid] = []
+    }
+  }
+
+  // Toggle expansion and lazily fetch tasks if not loaded yet
   const toggleExpand = async (img: InferenceImage) => {
     const currentState = !!expandedImages.value[img.guid]
     expandedImages.value[img.guid] = !currentState
 
     if (!currentState && !imageDetails.value[img.guid]) {
-      try {
-        const response = await fetch(`/images/${img.guid}/tasks`)
-        if (response.ok) {
-          const data = await response.json()
-          imageDetails.value[img.guid] = data.tasks || []
-        } else {
-          imageDetails.value[img.guid] = []
-        }
-      } catch (err) {
-        console.error('Failed to fetch tasks for image', err)
-        imageDetails.value[img.guid] = []
+      await fetchTasksForImage(img.guid)
+    }
+  }
+
+  // Start a task for the image guid
+  const startTaskOnImage = async (imgGuid: string) => {
+    try {
+      const response = await fetch(`/process-image/${imgGuid}`, { method: 'POST' })
+      if (!response.ok) {
+        throw new Error(`Server returned status ${response.status}`)
       }
+      // Automatically refresh tasks list after starting a new task
+      await fetchTasksForImage(imgGuid)
+    } catch (err) {
+      console.error('Failed to start processing on image:', err)
     }
   }
 
@@ -111,9 +169,43 @@
         <p class="text-sm text-slate-500 mt-1">Upload an image and view associated tasks.</p>
       </header>
       
+      <!-- Upload Section -->
+      <section class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 space-y-4">
+        <h2 class="text-lg font-semibold text-slate-700">Upload Image</h2>
+        
+        <div class="flex items-center space-x-4">
+          <input 
+            type="file" 
+            ref="fileInput"
+            @change="handleFileChange"
+            accept="image/jpeg, image/jpg, image/png"
+            class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+          />
+          <button 
+            @click="uploadImage"
+            :disabled="isUploading || !selectedFile"
+            class="px-5 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition whitespace-nowrap"
+          >
+            {{ isUploading ? 'Uploading...' : 'Upload Image' }}
+          </button>
+        </div>
+
+        <p v-if="uploadMessage" class="text-sm font-medium" :class="uploadMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'">
+          {{ uploadMessage }}
+        </p>
+      </section>
+
       <!-- Uploaded Images List -->
       <section class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 space-y-4">
-        <h2 class="text-lg font-semibold text-slate-700">Uploaded Images</h2>
+        <div class="flex justify-between items-center">
+          <h2 class="text-lg font-semibold text-slate-700">Uploaded Images</h2>
+          <button 
+            @click="fetchImages" 
+            class="px-3 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg text-xs font-semibold transition border border-slate-200 flex items-center gap-1.5"
+          >
+            🔄 Refresh Images
+          </button>
+        </div>
 
         <div v-if="images.length === 0" class="text-sm text-slate-400 italic">
           No images uploaded yet.
@@ -123,7 +215,7 @@
           <div 
             v-for="img in images" 
             :key="img.guid"
-            class="border border-slate-200 rounded-lg p-4 transition hover:border-blue-300 cursor-pointer"
+            class="border border-slate-200 rounded-lg p-4 transition hover:border-blue-300 cursor-pointer bg-white"
             @click="toggleExpand(img)"
           >
             <!-- Summary Row -->
@@ -138,7 +230,7 @@
             </div>
 
             <!-- Expanded Details -->
-            <div v-if="expandedImages[img.guid]" class="mt-4 pt-4 border-t border-slate-100 space-y-3" @click.stop>
+            <div v-if="expandedImages[img.guid]" class="mt-4 pt-4 border-t border-slate-100 space-y-4" @click.stop>
               <div class="flex gap-4 items-center">
 
                 <!-- Image Preview & 0 Detections Label -->
@@ -147,7 +239,7 @@
                     <img 
                       :src="activeTaskId[img.guid] ? `/tasks/${activeTaskId[img.guid]}/rendered-image` : `/${img.filepath}`" 
                       alt="Preview" 
-                      class="w-48 h-auto rounded-lg border border-slate-200 block" 
+                      class="w-48 h-auto rounded-lg border border-slate-200 block object-cover" 
                     />
                   </div>
                   <!-- Show "0 detections" if a task is selected and detections array is empty -->
@@ -159,8 +251,8 @@
                   </div>
                 </div>
 
-                <div>
-                  <button @click="startTaskOnImage(img.guid)" class="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-semibold hover:bg-blue-700">
+                <div class="flex flex-col gap-2">
+                  <button @click="startTaskOnImage(img.guid)" class="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-semibold hover:bg-blue-700 transition">
                     Start Task
                   </button>
                 </div>
@@ -172,9 +264,18 @@
                 </div>
               </div>
 
-              <!-- Associated Tasks List with Status and Count -->
-              <div>
-                <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Associated Tasks (Click to View)</h4>
+              <!-- Associated Tasks List with Status, Count, and Refresh Button -->
+              <div class="space-y-2">
+                <div class="flex justify-between items-center">
+                  <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500">Associated Tasks</h4>
+                  <button 
+                    @click="fetchTasksForImage(img.guid)" 
+                    class="text-[11px] font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-1 rounded transition border border-blue-100 flex items-center gap-1"
+                  >
+                    🔄 Refresh Tasks
+                  </button>
+                </div>
+
                 <div v-if="!imageDetails[img.guid] || imageDetails[img.guid].length === 0" class="text-xs text-slate-400 italic">
                   No tasks associated with this image yet.
                 </div>
