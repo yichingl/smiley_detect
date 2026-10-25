@@ -4,7 +4,7 @@ import glob
 from PIL import Image
 
 def augment_and_place(image_path, bg_size=1000):
-    """Loads a tight crop, scales, rotates, and places it randomly on a background canvas."""
+    """Loads a tight crop, scales, optionally mirrors horizontally, and places it randomly on a canvas."""
     img = Image.open(image_path).convert("L")
     
     # 1. Random Scaling (0.5x smaller to 1.5x larger)
@@ -13,9 +13,11 @@ def augment_and_place(image_path, bg_size=1000):
     new_h = int(img.height * scale_factor)
     img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
     
-    # 2. Random Rotation (-30 to 30 degrees, expanding canvas)
-    angle = random.uniform(-30, 30)
-    img = img.rotate(angle, expand=True, fillcolor=255)
+    # 2. Random Horizontal Mirroring (50% chance to flip left-to-right)
+    if random.random() > 0.5:
+        img = img.transpose(Image.FLIP_LEFT_RIGHT)
+        
+    # (Note: Rotation is kept at 0 degrees for upright-only faces)
     
     sw, sh = img.size
     if sw >= bg_size or sh >= bg_size:
@@ -41,13 +43,11 @@ def augment_and_place(image_path, bg_size=1000):
     return bg, x_center, y_center, width, height
 
 if __name__ == "__main__":
-    # Your directories
     img_train_dir = r"C:\Users\PC\SmileyDetect\dataset\images\train"
     lbl_train_dir = r"C:\Users\PC\SmileyDetect\dataset\labels\train"
     
     os.makedirs(lbl_train_dir, exist_ok=True)
     
-    # Gather all images currently in the train folder
     all_images = glob.glob(os.path.join(img_train_dir, "*.JPG")) + glob.glob(os.path.join(img_train_dir, "*.jpg"))
     
     if not all_images:
@@ -57,18 +57,16 @@ if __name__ == "__main__":
     pos_files = []
     neg_files = []
     
-    # Separate positives and negatives based on filename
     for img_path in all_images:
         filename = os.path.basename(img_path)
-        # If filename starts with 'n' or 'N', treat as negative
         if filename.lower().startswith('n'):
             neg_files.append(img_path)
         else:
             pos_files.append(img_path)
             
     print(f"Found {len(pos_files)} positive and {len(neg_files)} negative source images.")
-
-    # STEP 1: Generate base labels for your original raw crops so YOLO can read them
+    
+    # STEP 1: Generate base labels for your original raw crops
     print("Generating labels for original raw crops...")
     for img_path in all_images:
         filename = os.path.basename(img_path)
@@ -76,18 +74,16 @@ if __name__ == "__main__":
         lbl_path = os.path.join(lbl_train_dir, f"{base_name}.txt")
         
         if filename.lower().startswith('n'):
-            # Negative image -> empty label file
             open(lbl_path, "w").close()
         else:
-            # Positive tight crop -> full frame bounding box
             with open(lbl_path, "w") as f:
                 f.write("0 0.5 0.5 1.0 1.0\n")
                 
-    # STEP 2: Generate augmented variations (scale, rotate, random placement)
-    num_pos_aug = 100  # Number of augmented positive images to create
-    num_neg_aug = 100  # Number of augmented negative images to create
+    # STEP 2: Generate augmented variations (scale, mirror, random placement)
+    num_pos_aug = 200
+    num_neg_aug = 200
     
-    print(f"Generating {num_pos_aug} augmented positive samples...")
+    print(f"Generating {num_pos_aug} augmented positive samples (with mirroring)...")
     for i in range(num_pos_aug):
         if not pos_files: break
         src_file = random.choice(pos_files)
@@ -99,7 +95,7 @@ if __name__ == "__main__":
         with open(os.path.join(lbl_train_dir, f"{name}.txt"), "w") as f:
             f.write(f"0 {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}\n")
             
-    print(f"Generating {num_neg_aug} augmented negative samples...")
+    print(f"Generating {num_neg_aug} augmented negative samples (with mirroring)...")
     for i in range(num_neg_aug):
         if not neg_files: break
         src_file = random.choice(neg_files)
@@ -110,4 +106,4 @@ if __name__ == "__main__":
         bg.save(os.path.join(img_train_dir, f"{name}.jpg"))
         open(os.path.join(lbl_train_dir, f"{name}.txt"), "w").close()
         
-    print("Success! All original crops are labeled, and augmented samples have been added.")
+    print("Success! Mirroring and scaling augmentation complete.")
