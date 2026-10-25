@@ -81,7 +81,7 @@ def create_bulk_inference_images(db: Session, files: List[UploadFile]) -> List[u
         raise exc
 
 # insert a new image task record as initialized
-def create_inference_task(db: Session, image_guid: str) -> InferenceTask | None:
+def create_inference_task(db: Session, image_guid: str, model_name: str | None = None) -> InferenceTask | None:
 
     # TODO - validate inputs
     
@@ -102,6 +102,7 @@ def create_inference_task(db: Session, image_guid: str) -> InferenceTask | None:
             task_init_at = datetime.datetime.utcnow(),
             task_last_updated_at = datetime.datetime.utcnow(),
             task_status = "INITIALIZED",
+            model_name = model_name,
             result = None
         )
         db.add(new_task)
@@ -113,7 +114,7 @@ def create_inference_task(db: Session, image_guid: str) -> InferenceTask | None:
         raise exc
 
 # update the status of an existing task record
-def update_inference_task(db: Session, task_id: int, status: str, result: str = None) -> InferenceTask | None :
+def update_inference_task(db: Session, task_id: int, status: str, result: str = None, model_name: str | None = None) -> InferenceTask | None :
 
     # TODO - validate task_id, status
 
@@ -126,6 +127,8 @@ def update_inference_task(db: Session, task_id: int, status: str, result: str = 
 
         db_task.task_status = status
         db_task.result = result
+        if model_name is not None:
+            db_task.model_name = model_name
 
         db.commit()
         db.refresh(db_task)

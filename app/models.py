@@ -25,6 +25,7 @@ class InferenceTask(Base):
     task_init_at = Column(DateTime, nullable=True)
     task_last_updated_at = Column(DateTime, nullable=True)
     task_status = Column(String, default="PENDING") # TODO - define types for security here
+    model_name = Column(String, nullable=True)
     result = Column(Text, nullable=True)  # TODO - turn this into Detections table
     image = relationship("InferenceImage", back_populates="tasks")# Relationship to bounding box detections
     detections = relationship("DetectionResult", back_populates="task", cascade="all, delete-orphan")

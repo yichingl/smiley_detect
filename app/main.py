@@ -72,8 +72,10 @@ async def upload_images(
 @app.post("/process-image/{image_guid}")
 def trigger_image_processing(image_guid: str, db: Session = Depends(get_db)):
 
+    model_name = tasks.get_active_model_name()
+
     # insert the task record into the dabase
-    db_task_record = repo.create_inference_task(db, image_guid)
+    db_task_record = repo.create_inference_task(db, image_guid, model_name=model_name)
 
     # TODO - if failed to insert, throw
 
@@ -81,14 +83,15 @@ def trigger_image_processing(image_guid: str, db: Session = Depends(get_db)):
     task = tasks.process_sample_image.delay(db_task_record.task_identifier, db_task_record.id)
 
     # update status to PENDING
-    db_task_update = repo.update_inference_task(db, db_task_record.id, "PENDING")
+    db_task_update = repo.update_inference_task(db, db_task_record.id, "PENDING", model_name=model_name)
 
     # TODO - if task failed to start, record to db
 
     return {
         "task_guid": db_task_update.guid,
         "task_identifier": db_task_update.task_identifier,
-        "status": db_task_update.task_status
+        "status": db_task_update.task_status,
+        "model_name": db_task_update.model_name
     }
 
 @app.get("/task-details/{task_guid}")
@@ -118,6 +121,7 @@ def get_task_details(task_guid: str, db: Session = Depends(get_db)):
         "task_status": inference_task.task_status,
         "task_init_at": inference_task.task_init_at,
         "task_last_updated_at": inference_task.task_last_updated_at,
+        "model_name": inference_task.model_name,
         "result": inference_task.result,
         "detections": formatted_detections
     }
@@ -142,7 +146,8 @@ async def get_tasks_for_image(image_guid: str, db: Session = Depends(get_db)):
         {
             "guid": task.guid,
             "detection_count": len(task.detections),
-            "task_status": task.task_status
+            "task_status": task.task_status,
+            "model_name": task.model_name
         }
         for task in tasks
     ]

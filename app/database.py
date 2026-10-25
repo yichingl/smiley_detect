@@ -9,8 +9,10 @@ SQLALCHEMY_DATABASE_URL = "sqlite:///./smiley_app.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+
 
 def get_db():
     # 1. Open a new session using your SessionLocal factory
