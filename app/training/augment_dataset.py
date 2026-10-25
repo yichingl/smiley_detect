@@ -43,8 +43,8 @@ def augment_and_place(image_path, bg_size=1000):
     return bg, x_center, y_center, width, height
 
 if __name__ == "__main__":
-    img_train_dir = r"C:\Users\PC\SmileyDetect\dataset\images\train"
-    lbl_train_dir = r"C:\Users\PC\SmileyDetect\dataset\labels\train"
+    img_train_dir = r"dataset\images\train"
+    lbl_train_dir = r"dataset\labels\train"
     
     os.makedirs(lbl_train_dir, exist_ok=True)
     

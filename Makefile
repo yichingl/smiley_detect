@@ -3,8 +3,8 @@ SHELL := powershell.exe
 .PHONY: venv install run worker db-refresh redis-local dev docker-up docker-down clean train train-yolo
 
 venv:
-	python -m venv venv
-	@echo "Virtual environment created."
+	py -3.11 -m venv venv
+	@echo "Virtual environment created with Python 3.11."
 
 install: venv
 	.\venv\Scripts\pip install --upgrade pip
@@ -19,7 +19,7 @@ worker:
 # Rebuild the database from scratch (drops all tables and recreates them)
 db-refresh:
 	@echo "Rebuilding database..."
-	@python -c "from app.database import engine; from app.models import Base; Base.metadata.drop_all(bind=engine); Base.metadata.create_all(bind=engine)"
+	@.\venv\Scripts\python -c "from app.database import engine; from app.models import Base; Base.metadata.drop_all(bind=engine); Base.metadata.create_all(bind=engine)"
 	@echo "Database rebuilt successfully!"
 
 # Spins up a lightweight standalone Redis container for local dev
@@ -47,10 +47,10 @@ clean:
 # Model training
 # Train the proof-of-concept model using local directories
 train:
-	python -m app.training.train_model \
+	.\venv\Scripts\python -m app.training.train_model \
 		--positive-dir training_images/positive \
 		--negative-dir training_images/negative \
 		--output-path saved_models/smiley_v1.pkl
 
 train-yolo:
-	python -m app.training.train_yolo --epochs 25
+	.\venv\Scripts\python -m app.training.train_yolo --epochs 25
