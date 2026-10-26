@@ -8,10 +8,12 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# 4. System Dependencies: Install basic build tools (needed for packages like psycopg2)
+# 4. System Dependencies: Install build tools and OpenCV runtime libraries
 RUN apt-get update && apt-get install -y \
     gcc \
     libpq-dev \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # 5. Dependencies: Copy requirements first to leverage Docker's caching layer

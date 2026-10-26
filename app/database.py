@@ -1,11 +1,13 @@
 
+import os
+
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
 
 from app.models import Base
 
 # This sets up your local SQLite database file in your project root
-SQLALCHEMY_DATABASE_URL = "sqlite:///./smiley_app.db"
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./smiley_app.db")
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
