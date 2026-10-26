@@ -676,6 +676,13 @@ input:focus-visible {
   list-style: none;
 }
 
+.task-list__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
 .task-row {
   display: flex;
   width: 100%;
@@ -701,6 +708,80 @@ input:focus-visible {
   border-color: #9bb6ef;
   background: #f1f5ff;
   box-shadow: inset 3px 0 #4e79d3;
+}
+
+.task-menu {
+  position: relative;
+}
+
+.task-menu__trigger {
+  display: grid;
+  width: 34px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid #e2e7ef;
+  border-radius: 8px;
+  color: #64748b;
+  background: #fff;
+  font-size: 19px;
+}
+
+.task-menu__trigger:hover:not(:disabled) {
+  border-color: #cbd6e6;
+  color: #315fca;
+  background: #f8faff;
+}
+
+.task-menu__trigger:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.task-menu__popover {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 5px);
+  right: 0;
+  display: grid;
+  width: max-content;
+  min-width: 185px;
+  padding: 4px;
+  border: 1px solid #e2e7ef;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(29, 48, 82, 0.14);
+}
+
+.task-menu__popover button {
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 6px;
+  color: #45536a;
+  background: transparent;
+  font-size: 11px;
+  text-align: left;
+}
+
+.task-menu__popover button:hover:not(:disabled) {
+  color: #315fca;
+  background: #f1f5ff;
+}
+
+.task-menu__popover button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.task-menu__message {
+  grid-column: 1 / -1;
+  margin: 0 4px 3px;
+  color: #187451;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.task-menu__message--error {
+  color: #b43e3e;
 }
 
 .task-row__main {
@@ -760,6 +841,26 @@ input:focus-visible {
 .status-badge--initialized {
   color: #9a6716;
   background: #fff3d9;
+}
+
+.saved-badge {
+  padding: 4px 7px;
+  border-radius: 99px;
+  color: #53627a;
+  background: #eef1f5;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.saved-badge--1 {
+  color: #187451;
+  background: #e4f5ed;
+}
+
+.saved-badge--2 {
+  color: #315b9a;
+  background: #e8efff;
 }
 
 .detection-count {

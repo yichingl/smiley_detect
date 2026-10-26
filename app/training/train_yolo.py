@@ -14,6 +14,11 @@ def main():
     parser.add_argument("--epochs", type=int, default=20, help="Number of training epochs")
     parser.add_argument("--imgsz", type=int, default=640, help="Image size")
     parser.add_argument(
+        "--model",
+        default="yolov8n.pt",
+        help="Initial model weights or Ultralytics model name"
+    )
+    parser.add_argument(
         "--name",
         default=None,
         help="Optional model name. Defaults to a datetime-stamped value like smiley_run_20261025_170622"
@@ -27,8 +32,8 @@ def main():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     model_name = args.name or f"smiley_run_{timestamp}"
 
-    print("Initializing YOLO pretrained base model (yolov8n.pt)...")
-    model = YOLO("yolov8n.pt")
+    print(f"Initializing model weights ({args.model})...")
+    model = YOLO(args.model)
 
     print(f"Starting transfer learning / fine-tuning for {args.epochs} epochs...")
 

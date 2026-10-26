@@ -23,6 +23,8 @@ services:
     volumes:
       - smiley_uploads:/app/uploaded_images
       - smiley_data:/app/data
+      - ./dataset:/app/dataset
+      - ./saved_models:/app/saved_models
 
   # 3. Celery Background Worker
   worker:
@@ -37,6 +39,8 @@ services:
     volumes:
       - smiley_uploads:/app/uploaded_images
       - smiley_data:/app/data
+      - ./dataset:/app/dataset
+      - ./saved_models:/app/saved_models
 
 volumes:
   smiley_uploads:

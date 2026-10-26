@@ -1,6 +1,6 @@
 SHELL := powershell.exe
 
-.PHONY: venv install run worker db-refresh redis-local dev docker-up docker-down clean train train-yolo
+.PHONY: venv install run worker db-refresh db-upgrade redis-local dev docker-up docker-down clean train train-yolo
 
 venv:
 	py -3.11 -m venv venv
@@ -22,6 +22,10 @@ db-refresh:
 	@echo "Rebuilding database..."
 	@.\venv\Scripts\python -c "from app.database import engine; from app.models import Base; Base.metadata.drop_all(bind=engine); Base.metadata.create_all(bind=engine)"
 	@echo "Database rebuilt successfully!"
+
+# Safely add missing columns to an existing database without dropping data
+db-upgrade:
+	.\venv\Scripts\python -m app.migrations
 
 # Spins up a lightweight standalone Redis container for local dev
 redis-local:

@@ -15,6 +15,7 @@
     detection_count: number
     task_status: string
     model_name?: string | null
+    saved: 0 | 1 | 2
   }
 
   interface Detection {
@@ -116,6 +117,9 @@
   )
   const expandedImages = ref<Record<string, boolean>>({})
   const imageDetails = ref<Record<string, TaskInfo[]>>({})
+  const openTaskMenuId = ref('')
+  const savingDatasetTaskId = ref('')
+  const datasetSaveMessages = ref<Record<string, string>>({})
 
   // Track active detections and selected task ID per image
   const activeDetections = ref<Record<string, Detection[]>>({})
@@ -289,6 +293,50 @@
     } catch (err) {
       console.error('Failed to fetch tasks for image', err)
       imageDetails.value[imgGuid] = []
+    }
+  }
+
+  const addTaskToDataset = async (taskGuid: string, split: 'train' | 'val') => {
+    const splitLabel = split === 'train' ? 'training' : 'validation'
+    const confirmed = window.confirm(
+      `Are you sure? The prediction and the image will be saved as ${splitLabel} data without any corrections.`
+    )
+    if (!confirmed) {
+      openTaskMenuId.value = ''
+      return
+    }
+
+    savingDatasetTaskId.value = taskGuid
+    datasetSaveMessages.value[taskGuid] = ''
+    try {
+      const response = await fetch(`/tasks/${taskGuid}/add-to-dataset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ split })
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(result.detail || `Server returned status ${response.status}`)
+      }
+
+      datasetSaveMessages.value[taskGuid] = `Saved ${result.image} to ${splitLabel} data.`
+      for (const tasks of Object.values(imageDetails.value)) {
+        const task = tasks.find((item) => item.guid === taskGuid)
+        if (task) {
+          task.saved = result.saved
+        }
+      }
+      if (split === 'train') {
+        trainingImagesLoaded.value = false
+      } else {
+        validationImagesLoaded.value = false
+      }
+      openTaskMenuId.value = ''
+    } catch (err) {
+      datasetSaveMessages.value[taskGuid] = err instanceof Error ? err.message : 'Could not save task to dataset.'
+      console.error('Failed to add task to dataset:', err)
+    } finally {
+      savingDatasetTaskId.value = ''
     }
   }
 
@@ -563,7 +611,7 @@
                   No tasks yet. Run detection to create the first task.
                 </div>
                 <ul v-else class="task-list">
-                  <li v-for="task in imageDetails[img.guid]" :key="task.guid">
+                  <li v-for="task in imageDetails[img.guid]" :key="task.guid" class="task-list__item">
                     <button
                       class="task-row"
                       :class="{ 'task-row--active': activeTaskId[img.guid] === task.guid }"
@@ -579,12 +627,51 @@
                         <span class="status-badge" :class="`status-badge--${task.task_status.toLowerCase()}`">
                           {{ task.task_status }}
                         </span>
+                        <span class="saved-badge" :class="`saved-badge--${task.saved}`">
+                          {{ task.saved === 1 ? 'Saved to Training' : task.saved === 2 ? 'Saved to Validation' : 'Unsaved' }}
+                        </span>
                         <span class="detection-count">
                           <strong>{{ task.detection_count }}</strong>
                           {{ task.detection_count === 1 ? 'detection' : 'detections' }}
                         </span>
                       </span>
                     </button>
+                    <div class="task-menu">
+                      <button
+                        class="task-menu__trigger"
+                        type="button"
+                        :aria-label="`Actions for task ${task.guid}`"
+                        :aria-expanded="openTaskMenuId === task.guid"
+                        :disabled="savingDatasetTaskId === task.guid"
+                        @click.stop="openTaskMenuId = openTaskMenuId === task.guid ? '' : task.guid"
+                      >
+                        <span aria-hidden="true">⋮</span>
+                      </button>
+                      <div v-if="openTaskMenuId === task.guid" class="task-menu__popover">
+                        <button
+                          type="button"
+                          :disabled="task.task_status !== 'SUCCESS' || task.saved !== 0 || savingDatasetTaskId === task.guid"
+                          @click="addTaskToDataset(task.guid, 'train')"
+                        >
+                          Add as training data
+                        </button>
+                        <button
+                          type="button"
+                          :disabled="task.task_status !== 'SUCCESS' || task.saved !== 0 || savingDatasetTaskId === task.guid"
+                          @click="addTaskToDataset(task.guid, 'val')"
+                        >
+                          Add as validation data
+                        </button>
+                      </div>
+                    </div>
+                    <p
+                      v-if="datasetSaveMessages[task.guid]"
+                      class="task-menu__message"
+                      :class="{ 'task-menu__message--error': !datasetSaveMessages[task.guid].startsWith('Saved ') }"
+                      role="status"
+                    >
+                      {{ datasetSaveMessages[task.guid] }}
+                    </p>
                   </li>
                 </ul>
               </div>

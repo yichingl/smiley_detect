@@ -2,8 +2,9 @@ from contextlib import asynccontextmanager
 import csv
 import hashlib
 import json
+import shutil
 import threading
-from typing import List
+from typing import List, Literal
 from urllib.parse import quote
 
 from uuid import uuid4
@@ -12,8 +13,9 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, Depends
 from pydantic import BaseModel
+from sqlalchemy.exc import SQLAlchemyError
 from app.database import get_db, init_db
-from app.models import InferenceImage, InferenceTask
+from app.models import InferenceImage, InferenceTask, SavedStatus
 import app.repositories as repo
 import app.tasks as tasks
 from pathlib import Path
@@ -51,6 +53,10 @@ VALIDATION_CACHE_LOCK = threading.Lock()
 
 class ProcessImageRequest(BaseModel):
     model_name: str
+
+
+class AddTaskToDatasetRequest(BaseModel):
+    split: Literal["train", "val"]
 
 
 # 4. Ensure the directory physically exists
@@ -169,9 +175,101 @@ def get_task_details(task_guid: str, db: Session = Depends(get_db)):
         "task_init_at": inference_task.task_init_at,
         "task_last_updated_at": inference_task.task_last_updated_at,
         "model_name": inference_task.model_name,
+        "saved": inference_task.saved,
         "result": inference_task.result,
         "detections": formatted_detections
     }
+
+
+@app.post("/tasks/{task_guid}/add-to-dataset")
+def add_task_to_dataset(
+    task_guid: str,
+    request: AddTaskToDatasetRequest,
+    db: Session = Depends(get_db)
+):
+    task = repo.get_task_by_guid(db, task_guid)
+    if not task or not task.image:
+        raise HTTPException(status_code=404, detail="Task or source image not found")
+    if task.task_status != "SUCCESS":
+        raise HTTPException(status_code=409, detail="Only successfully completed tasks can be added to a dataset")
+    if task.saved != SavedStatus.UNSAVED.value:
+        raise HTTPException(status_code=409, detail="Task has already been saved to a dataset")
+
+    source_path = (BASE_DIR / task.image.filepath).resolve()
+    upload_dir = UPLOAD_DIR.resolve()
+    if not source_path.is_relative_to(upload_dir) or not source_path.is_file():
+        raise HTTPException(status_code=404, detail="Source image file not found in uploads")
+
+    image = cv2.imread(str(source_path))
+    if image is None:
+        raise HTTPException(status_code=500, detail="Failed to decode source image")
+    image_height, image_width = image.shape[:2]
+
+    split_dirs = {
+        "train": (TRAINING_IMAGE_DIR, TRAINING_LABEL_DIR),
+        "val": (VALIDATION_IMAGE_DIR, VALIDATION_LABEL_DIR)
+    }
+    image_dir, label_dir = split_dirs[request.split]
+    if not image_dir.is_dir() or not label_dir.is_dir():
+        raise HTTPException(status_code=500, detail=f"{request.split} dataset directories not found")
+
+    extension = source_path.suffix.lower()
+    if extension not in {".jpg", ".jpeg", ".png"}:
+        raise HTTPException(status_code=400, detail="Source image format is not supported for training")
+
+    filename = f"inference_{uuid4().hex}{extension}"
+    destination_image = image_dir / filename
+    destination_label = label_dir / f"{Path(filename).stem}.txt"
+    temporary_image = destination_image.with_name(f".{destination_image.name}.tmp")
+    temporary_label = destination_label.with_name(f".{destination_label.name}.tmp")
+
+    label_lines = []
+    for detection in task.detections:
+        x_min = max(0, min(image_width, detection.x_min))
+        y_min = max(0, min(image_height, detection.y_min))
+        x_max = max(0, min(image_width, detection.x_max))
+        y_max = max(0, min(image_height, detection.y_max))
+        if x_max <= x_min or y_max <= y_min:
+            continue
+
+        x_center = ((x_min + x_max) / 2) / image_width
+        y_center = ((y_min + y_max) / 2) / image_height
+        box_width = (x_max - x_min) / image_width
+        box_height = (y_max - y_min) / image_height
+        label_lines.append(f"0 {x_center:.6f} {y_center:.6f} {box_width:.6f} {box_height:.6f}")
+
+    try:
+        shutil.copyfile(source_path, temporary_image)
+        temporary_label.write_text(
+            "\n".join(label_lines) + ("\n" if label_lines else ""),
+            encoding="utf-8"
+        )
+        temporary_image.replace(destination_image)
+        temporary_label.replace(destination_label)
+    except OSError as exc:
+        temporary_image.unlink(missing_ok=True)
+        temporary_label.unlink(missing_ok=True)
+        destination_image.unlink(missing_ok=True)
+        destination_label.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Failed to save image and labels to the dataset") from exc
+
+    task.saved = SavedStatus.TRAINING.value if request.split == "train" else SavedStatus.VALIDATION.value
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        destination_image.unlink(missing_ok=True)
+        destination_label.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Failed to update task saved status") from exc
+
+    return {
+        "split": request.split,
+        "image": filename,
+        "label": destination_label.name,
+        "detection_count": len(label_lines),
+        "saved": task.saved
+    }
+
 
 @app.get("/images")
 def get_images(db: Session = Depends(get_db)): # TODO paginate and filter
@@ -194,7 +292,8 @@ async def get_tasks_for_image(image_guid: str, db: Session = Depends(get_db)):
             "guid": task.guid,
             "detection_count": len(task.detections),
             "task_status": task.task_status,
-            "model_name": task.model_name
+            "model_name": task.model_name,
+            "saved": task.saved
         }
         for task in tasks
     ]
