@@ -58,4 +58,4 @@ train:
 		--output-path saved_models/smiley_v1.pkl
 
 train-yolo:
-	.\venv\Scripts\python -m app.training.train_yolo --epochs 25
+	.\venv\Scripts\python -m app.training.train_yolo --epochs 15
