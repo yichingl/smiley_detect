@@ -2,6 +2,8 @@ from contextlib import asynccontextmanager
 import csv
 import hashlib
 import json
+import logging
+import math
 import shutil
 import threading
 from typing import List, Literal
@@ -10,6 +12,7 @@ from urllib.parse import quote
 from uuid import uuid4
 import cv2
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, Depends
 from pydantic import BaseModel
@@ -20,11 +23,16 @@ import app.repositories as repo
 import app.tasks as tasks
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 # 1. Define the lifespan context manager first
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- Startup Logic ---
     init_db()  # Creates the database and tables on startup
+    from app.migrations import upgrade_saved_column
+
+    upgrade_saved_column()
     yield
     # --- Shutdown Logic (optional) ---
 
@@ -48,6 +56,13 @@ TRAINING_CACHE_DIR = BASE_DIR / "data" / "training_rendered"
 SAVED_MODELS_DIR = BASE_DIR / "saved_models"
 VALIDATION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 TRAINING_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+for dataset_directory in (
+    VALIDATION_IMAGE_DIR,
+    VALIDATION_LABEL_DIR,
+    TRAINING_IMAGE_DIR,
+    TRAINING_LABEL_DIR
+):
+    dataset_directory.mkdir(parents=True, exist_ok=True)
 VALIDATION_CACHE_LOCK = threading.Lock()
 
 
@@ -55,8 +70,27 @@ class ProcessImageRequest(BaseModel):
     model_name: str
 
 
+class CorrectedBox(BaseModel):
+    x_min: float
+    y_min: float
+    x_max: float
+    y_max: float
+
+
 class AddTaskToDatasetRequest(BaseModel):
     split: Literal["train", "val"]
+    corrected_box: CorrectedBox | None = None
+
+
+def _validated_corrected_box(box: CorrectedBox, image_width: int, image_height: int) -> tuple[int, int, int, int]:
+    coordinates = (box.x_min, box.y_min, box.x_max, box.y_max)
+    if not all(math.isfinite(value) for value in coordinates):
+        raise HTTPException(status_code=400, detail="Bounding box coordinates must be finite numbers")
+    if box.x_min < 0 or box.y_min < 0 or box.x_max > image_width or box.y_max > image_height:
+        raise HTTPException(status_code=400, detail="Bounding box must fit within the image")
+    if box.x_max <= box.x_min or box.y_max <= box.y_min:
+        raise HTTPException(status_code=400, detail="Bounding box must have positive width and height")
+    return tuple(int(round(value)) for value in coordinates)
 
 
 # 4. Ensure the directory physically exists
@@ -194,6 +228,11 @@ def add_task_to_dataset(
         raise HTTPException(status_code=409, detail="Only successfully completed tasks can be added to a dataset")
     if task.saved != SavedStatus.UNSAVED.value:
         raise HTTPException(status_code=409, detail="Task has already been saved to a dataset")
+    if request.corrected_box is not None:
+        if request.split != "train":
+            raise HTTPException(status_code=400, detail="Corrected boxes can only be saved as training data")
+        if task.detections:
+            raise HTTPException(status_code=409, detail="Corrections are only allowed for tasks with no detections")
 
     source_path = (BASE_DIR / task.image.filepath).resolve()
     upload_dir = UPLOAD_DIR.resolve()
@@ -220,17 +259,23 @@ def add_task_to_dataset(
     filename = f"inference_{uuid4().hex}{extension}"
     destination_image = image_dir / filename
     destination_label = label_dir / f"{Path(filename).stem}.txt"
-    temporary_image = destination_image.with_name(f".{destination_image.name}.tmp")
-    temporary_label = destination_label.with_name(f".{destination_label.name}.tmp")
-
     label_lines = []
-    for detection in task.detections:
-        x_min = max(0, min(image_width, detection.x_min))
-        y_min = max(0, min(image_height, detection.y_min))
-        x_max = max(0, min(image_width, detection.x_max))
-        y_max = max(0, min(image_height, detection.y_max))
+    box_coordinates = (
+        [request.corrected_box]
+        if request.corrected_box is not None
+        else task.detections
+    )
+    for box in box_coordinates:
+        x_min = box.x_min
+        y_min = box.y_min
+        x_max = box.x_max
+        y_max = box.y_max
+        if not all(math.isfinite(value) for value in (x_min, y_min, x_max, y_max)):
+            raise HTTPException(status_code=400, detail="Bounding box coordinates must be finite numbers")
+        if x_min < 0 or y_min < 0 or x_max > image_width or y_max > image_height:
+            raise HTTPException(status_code=400, detail="Bounding box must fit within the image")
         if x_max <= x_min or y_max <= y_min:
-            continue
+            raise HTTPException(status_code=400, detail="Bounding box must have positive width and height")
 
         x_center = ((x_min + x_max) / 2) / image_width
         y_center = ((y_min + y_max) / 2) / image_height
@@ -238,20 +283,26 @@ def add_task_to_dataset(
         box_height = (y_max - y_min) / image_height
         label_lines.append(f"0 {x_center:.6f} {y_center:.6f} {box_width:.6f} {box_height:.6f}")
 
+    write_stage = "image"
     try:
-        shutil.copyfile(source_path, temporary_image)
-        temporary_label.write_text(
-            "\n".join(label_lines) + ("\n" if label_lines else ""),
-            encoding="utf-8"
-        )
-        temporary_image.replace(destination_image)
-        temporary_label.replace(destination_label)
+        with source_path.open("rb") as source_file, destination_image.open("xb") as image_file:
+            shutil.copyfileobj(source_file, image_file)
+
+        write_stage = "label"
+        with destination_label.open("x", encoding="utf-8") as label_file:
+            label_file.write("\n".join(label_lines) + ("\n" if label_lines else ""))
     except OSError as exc:
-        temporary_image.unlink(missing_ok=True)
-        temporary_label.unlink(missing_ok=True)
-        destination_image.unlink(missing_ok=True)
-        destination_label.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail="Failed to save image and labels to the dataset") from exc
+        logger.exception("Failed to write dataset %s for task %s", write_stage, task_guid)
+        for path in (destination_image, destination_label):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logger.exception("Failed to remove incomplete dataset file %s", path)
+        reason = exc.strerror or str(exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save dataset {write_stage}: {reason}"
+        ) from exc
 
     task.saved = SavedStatus.TRAINING.value if request.split == "train" else SavedStatus.VALIDATION.value
     try:
@@ -273,8 +324,23 @@ def add_task_to_dataset(
 
 @app.get("/images")
 def get_images(db: Session = Depends(get_db)): # TODO paginate and filter
-    db_result: List[InferenceImage] | None = repo.get_inference_images(db)
-    return db_result
+    image_counts = (
+        db.query(InferenceImage, func.count(InferenceTask.id).label("task_count"))
+        .outerjoin(InferenceTask, InferenceTask.image_id == InferenceImage.id)
+        .group_by(InferenceImage.id)
+        .all()
+    )
+    return [
+        {
+            "guid": image.guid,
+            "name": image.name,
+            "filepath": image.filepath,
+            "upload_group_id": image.upload_group_id,
+            "uploaded_at": image.uploaded_at,
+            "task_count": task_count
+        }
+        for image, task_count in image_counts
+    ]
 
 @app.get("/images/{image_guid}/tasks")
 async def get_tasks_for_image(image_guid: str, db: Session = Depends(get_db)):
@@ -338,6 +404,39 @@ def get_rendered_image(task_guid: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Failed to encode processed image")
 
     # 6. Return the image directly as an HTTP response
+    return Response(content=encoded_image.tobytes(), media_type="image/jpeg")
+
+
+@app.post("/tasks/{task_guid}/corrected-preview")
+def get_corrected_box_preview(
+    task_guid: str,
+    box: CorrectedBox,
+    db: Session = Depends(get_db)
+):
+    task = repo.get_task_by_guid(db, task_guid)
+    if not task or not task.image:
+        raise HTTPException(status_code=404, detail="Task or source image not found")
+    if task.task_status != "SUCCESS":
+        raise HTTPException(status_code=409, detail="Only successfully completed tasks can be previewed")
+    if task.saved != SavedStatus.UNSAVED.value:
+        raise HTTPException(status_code=409, detail="Task has already been saved to a dataset")
+    if task.detections:
+        raise HTTPException(status_code=409, detail="Corrections are only allowed for tasks with no detections")
+
+    image_path = (BASE_DIR / task.image.filepath).resolve()
+    if not image_path.is_relative_to(UPLOAD_DIR.resolve()) or not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Source image file not found in uploads")
+
+    image = cv2.imread(str(image_path))
+    if image is None:
+        raise HTTPException(status_code=500, detail="Failed to decode source image")
+    image_height, image_width = image.shape[:2]
+    x_min, y_min, x_max, y_max = _validated_corrected_box(box, image_width, image_height)
+    cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 0, 255), 2)
+
+    success, encoded_image = cv2.imencode(".jpg", image)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to encode corrected-box preview")
     return Response(content=encoded_image.tobytes(), media_type="image/jpeg")
 
 

@@ -8,6 +8,7 @@
     filepath: string
     upload_group_id: string
     uploaded_at?: string
+    task_count: number
   }
 
   interface TaskInfo {
@@ -21,6 +22,13 @@
   interface Detection {
     id: number
     confidence: number
+    x_min: number
+    y_min: number
+    x_max: number
+    y_max: number
+  }
+
+  interface BoxCoordinates {
     x_min: number
     y_min: number
     x_max: number
@@ -120,6 +128,51 @@
   const openTaskMenuId = ref('')
   const savingDatasetTaskId = ref('')
   const datasetSaveMessages = ref<Record<string, string>>({})
+  const correctionTaskGuid = ref('')
+  const correctionImage = ref<InferenceImage | null>(null)
+  const correctionImageDimensions = ref<{ width: number; height: number } | null>(null)
+  const correctionBox = ref<BoxCoordinates | null>(null)
+  const correctionAnchor = ref<{ x: number; y: number } | null>(null)
+  const correctionCursor = ref<{ x: number; y: number } | null>(null)
+  const correctionError = ref('')
+  const isSavingCorrection = ref(false)
+  const isLoadingCorrectionPreview = ref(false)
+  const isCorrectionPreviewOpen = ref(false)
+  const correctionPreviewUrl = ref('')
+  const correctionOverlayBox = computed(() => {
+    const first = correctionAnchor.value
+    const second = correctionCursor.value
+    const box = correctionBox.value
+    if (box) {
+      return {
+        x: box.x_min,
+        y: box.y_min,
+        width: box.x_max - box.x_min,
+        height: box.y_max - box.y_min
+      }
+    }
+    if (first && second) {
+      return {
+        x: Math.min(first.x, second.x),
+        y: Math.min(first.y, second.y),
+        width: Math.abs(second.x - first.x),
+        height: Math.abs(second.y - first.y)
+      }
+    }
+    return null
+  })
+  const correctionLabelPreview = computed(() => {
+    const box = correctionBox.value
+    const dimensions = correctionImageDimensions.value
+    if (!box || !dimensions) {
+      return 'Click the top-left corner, then the bottom-right corner of the smiley.'
+    }
+    const xCenter = ((box.x_min + box.x_max) / 2) / dimensions.width
+    const yCenter = ((box.y_min + box.y_max) / 2) / dimensions.height
+    const width = (box.x_max - box.x_min) / dimensions.width
+    const height = (box.y_max - box.y_min) / dimensions.height
+    return `0 ${xCenter.toFixed(6)} ${yCenter.toFixed(6)} ${width.toFixed(6)} ${height.toFixed(6)}`
+  })
 
   // Track active detections and selected task ID per image
   const activeDetections = ref<Record<string, Detection[]>>({})
@@ -287,12 +340,171 @@
       if (response.ok) {
         const data = await response.json()
         imageDetails.value[imgGuid] = data.tasks || []
+        const image = images.value.find((item) => item.guid === imgGuid)
+        if (image) image.task_count = imageDetails.value[imgGuid].length
       } else {
         imageDetails.value[imgGuid] = []
       }
     } catch (err) {
       console.error('Failed to fetch tasks for image', err)
       imageDetails.value[imgGuid] = []
+    }
+  }
+
+  const openCorrectionModal = (task: TaskInfo, image: InferenceImage) => {
+    if (correctionPreviewUrl.value) URL.revokeObjectURL(correctionPreviewUrl.value)
+    correctionPreviewUrl.value = ''
+    isCorrectionPreviewOpen.value = false
+    correctionTaskGuid.value = task.guid
+    correctionImage.value = image
+    correctionImageDimensions.value = null
+    correctionBox.value = null
+    correctionAnchor.value = null
+    correctionCursor.value = null
+    correctionError.value = ''
+    openTaskMenuId.value = ''
+  }
+
+  const closeCorrectionModal = (force = false) => {
+    if (isSavingCorrection.value && !force) return
+    correctionTaskGuid.value = ''
+    correctionImage.value = null
+    correctionImageDimensions.value = null
+    correctionBox.value = null
+    correctionAnchor.value = null
+    correctionCursor.value = null
+    correctionError.value = ''
+    if (correctionPreviewUrl.value) {
+      URL.revokeObjectURL(correctionPreviewUrl.value)
+      correctionPreviewUrl.value = ''
+    }
+    isCorrectionPreviewOpen.value = false
+  }
+
+  const onCorrectionImageLoad = (event: Event) => {
+    const image = event.currentTarget as HTMLImageElement
+    correctionImageDimensions.value = {
+      width: image.naturalWidth,
+      height: image.naturalHeight
+    }
+  }
+
+  const selectCorrectionPoint = (event: PointerEvent) => {
+    const dimensions = correctionImageDimensions.value
+    if (!dimensions) return
+
+    const svg = event.currentTarget as SVGSVGElement
+    const bounds = svg.getBoundingClientRect()
+    const point = {
+      x: Math.max(0, Math.min(dimensions.width, ((event.clientX - bounds.left) / bounds.width) * dimensions.width)),
+      y: Math.max(0, Math.min(dimensions.height, ((event.clientY - bounds.top) / bounds.height) * dimensions.height))
+    }
+
+    if (!correctionAnchor.value) {
+      correctionAnchor.value = point
+      correctionCursor.value = point
+      correctionBox.value = null
+      correctionError.value = ''
+      return
+    }
+
+    const box = {
+      x_min: Math.min(correctionAnchor.value.x, point.x),
+      y_min: Math.min(correctionAnchor.value.y, point.y),
+      x_max: Math.max(correctionAnchor.value.x, point.x),
+      y_max: Math.max(correctionAnchor.value.y, point.y)
+    }
+    correctionAnchor.value = null
+    correctionCursor.value = null
+    if (box.x_max <= box.x_min || box.y_max <= box.y_min) {
+      correctionError.value = 'The box must have positive width and height. Select two different corners.'
+      return
+    }
+    correctionBox.value = box
+  }
+
+  const updateCorrectionPreviewPoint = (event: PointerEvent) => {
+    const dimensions = correctionImageDimensions.value
+    if (!dimensions || !correctionAnchor.value) return
+
+    const svg = event.currentTarget as SVGSVGElement
+    const bounds = svg.getBoundingClientRect()
+    correctionCursor.value = {
+      x: Math.max(0, Math.min(dimensions.width, ((event.clientX - bounds.left) / bounds.width) * dimensions.width)),
+      y: Math.max(0, Math.min(dimensions.height, ((event.clientY - bounds.top) / bounds.height) * dimensions.height))
+    }
+  }
+
+  const openCorrectionConfirmation = async () => {
+    const box = correctionBox.value
+    const taskGuid = correctionTaskGuid.value
+    if (!box || !taskGuid) return
+
+    isLoadingCorrectionPreview.value = true
+    correctionError.value = ''
+    try {
+      const response = await fetch(`/tasks/${taskGuid}/corrected-preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(box)
+      })
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || `Preview request failed with status ${response.status}`)
+      }
+
+      if (correctionPreviewUrl.value) URL.revokeObjectURL(correctionPreviewUrl.value)
+      correctionPreviewUrl.value = URL.createObjectURL(await response.blob())
+      isCorrectionPreviewOpen.value = true
+    } catch (err) {
+      correctionError.value = err instanceof Error ? err.message : 'Could not render the corrected-box preview.'
+      console.error('Failed to render corrected-box preview:', err)
+    } finally {
+      isLoadingCorrectionPreview.value = false
+    }
+  }
+
+  const closeCorrectionConfirmation = () => {
+    if (isSavingCorrection.value) return
+    isCorrectionPreviewOpen.value = false
+    if (correctionPreviewUrl.value) {
+      URL.revokeObjectURL(correctionPreviewUrl.value)
+      correctionPreviewUrl.value = ''
+    }
+  }
+
+  const saveCorrectedTrainingData = async () => {
+    const box = correctionBox.value
+    const taskGuid = correctionTaskGuid.value
+    if (!box || !taskGuid) return
+
+    isSavingCorrection.value = true
+    correctionError.value = ''
+    datasetSaveMessages.value[taskGuid] = ''
+    try {
+      const response = await fetch(`/tasks/${taskGuid}/add-to-dataset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ split: 'train', corrected_box: box })
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(result.detail || `Server returned status ${response.status}`)
+      }
+
+      for (const taskList of Object.values(imageDetails.value)) {
+        const task = taskList.find((item) => item.guid === taskGuid)
+        if (task) task.saved = result.saved
+      }
+      datasetSaveMessages.value[taskGuid] = `Saved ${result.image} to training data with your corrected box.`
+      trainingImagesLoaded.value = false
+      closeCorrectionConfirmation()
+      closeCorrectionModal(true)
+    } catch (err) {
+      correctionError.value = err instanceof Error ? err.message : 'Could not save corrected training data.'
+      console.error('Failed to save corrected training data:', err)
+    } finally {
+      isSavingCorrection.value = false
     }
   }
 
@@ -529,7 +741,12 @@
         </div>
 
         <div v-else class="image-list">
-          <article v-for="img in images" :key="img.guid" class="image-card">
+          <article
+            v-for="img in images"
+            :key="img.guid"
+            class="image-card"
+            :class="{ 'image-card--menu-open': openTaskMenuId && imageDetails[img.guid]?.some((task) => task.guid === openTaskMenuId) }"
+          >
             <div class="image-card__summary">
               <button
                 class="image-card__toggle"
@@ -547,8 +764,8 @@
                 </span>
               </button>
               <span class="image-card__task-count">
-                {{ imageDetails[img.guid]?.length ?? 0 }}
-                {{ imageDetails[img.guid]?.length === 1 ? 'task' : 'tasks' }}
+                {{ img.task_count }}
+                {{ img.task_count === 1 ? 'task' : 'tasks' }}
               </span>
             </div>
 
@@ -661,6 +878,14 @@
                           @click="addTaskToDataset(task.guid, 'val')"
                         >
                           Add as validation data
+                        </button>
+                        <button
+                          v-if="task.detection_count === 0"
+                          type="button"
+                          :disabled="task.task_status !== 'SUCCESS' || task.saved !== 0 || savingDatasetTaskId === task.guid"
+                          @click="openCorrectionModal(task, img)"
+                        >
+                          Correct and add as training data
                         </button>
                       </div>
                     </div>
@@ -915,6 +1140,160 @@
             </div>
           </article>
         </div>
+      </section>
+    </div>
+
+    <div
+      v-if="correctionTaskGuid && correctionImage"
+      class="correction-modal-backdrop"
+      role="presentation"
+      @click.self="closeCorrectionModal()"
+    >
+      <section
+        class="correction-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="correction-modal-heading"
+      >
+        <header class="correction-modal__header">
+          <div>
+            <p class="eyebrow">CORRECT LABEL</p>
+            <h2 id="correction-modal-heading">Draw a smiley bounding box</h2>
+            <p class="section-description">
+              Click the top-left corner and then the bottom-right corner of the smiley. The image is saved to training data with this label.
+            </p>
+          </div>
+          <button
+            class="model-picker__close"
+            type="button"
+            aria-label="Close correction dialog"
+            :disabled="isSavingCorrection"
+            @click="closeCorrectionModal()"
+          >
+            ×
+          </button>
+        </header>
+
+        <div class="correction-modal__body">
+          <div
+            class="correction-canvas"
+            :style="correctionImageDimensions
+              ? { aspectRatio: `${correctionImageDimensions.width} / ${correctionImageDimensions.height}` }
+              : undefined"
+          >
+            <img
+              :src="`/${correctionImage.filepath}`"
+              :alt="`Draw a corrected box around the smiley in ${correctionImage.name}`"
+              @load="onCorrectionImageLoad"
+              @error="correctionError = 'Could not load the original image.'"
+            />
+            <svg
+              v-if="correctionImageDimensions"
+              class="correction-canvas__overlay"
+              :viewBox="`0 0 ${correctionImageDimensions.width} ${correctionImageDimensions.height}`"
+              preserveAspectRatio="none"
+              role="presentation"
+              @pointerup="selectCorrectionPoint"
+              @pointermove="updateCorrectionPreviewPoint"
+            >
+              <rect
+                v-if="correctionOverlayBox && correctionOverlayBox.width > 0 && correctionOverlayBox.height > 0"
+                :x="correctionOverlayBox.x"
+                :y="correctionOverlayBox.y"
+                :width="correctionOverlayBox.width"
+                :height="correctionOverlayBox.height"
+                class="correction-canvas__box"
+              />
+            </svg>
+          </div>
+          <div class="correction-label">
+            <strong>YOLO training label (class x_center y_center width height)</strong>
+            <code>{{ correctionLabelPreview }}</code>
+          </div>
+          <p v-if="correctionError" class="correction-modal__error" role="alert">{{ correctionError }}</p>
+        </div>
+
+        <footer class="correction-modal__footer">
+          <button
+            class="button button--secondary"
+            type="button"
+            :disabled="isSavingCorrection"
+            @click="closeCorrectionModal()"
+          >
+            Cancel
+          </button>
+          <button
+            class="button button--secondary"
+            type="button"
+            :disabled="!correctionBox || isSavingCorrection"
+            @click="correctionBox = null; correctionAnchor = null; correctionCursor = null; correctionError = ''"
+          >
+            Redraw box
+          </button>
+          <button
+            class="button button--primary"
+            type="button"
+            :disabled="!correctionBox || isSavingCorrection || isLoadingCorrectionPreview"
+            @click="openCorrectionConfirmation"
+          >
+            <span v-if="isLoadingCorrectionPreview" class="button-spinner" aria-hidden="true"></span>
+            {{ isLoadingCorrectionPreview ? 'Preparing preview…' : 'Review and save' }}
+          </button>
+        </footer>
+      </section>
+    </div>
+
+    <div
+      v-if="isCorrectionPreviewOpen && correctionPreviewUrl"
+      class="correction-confirm-backdrop"
+      role="presentation"
+      @click.self="closeCorrectionConfirmation"
+    >
+      <section
+        class="correction-confirm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="correction-confirm-heading"
+      >
+        <header class="correction-modal__header">
+          <div>
+            <p class="eyebrow">CONFIRM TRAINING DATA</p>
+            <h2 id="correction-confirm-heading">Review the corrected image</h2>
+            <p class="section-description">
+              Confirm that the red box correctly surrounds the smiley before saving this image and label to training data.
+            </p>
+          </div>
+        </header>
+        <div class="correction-confirm__body">
+          <img
+            class="correction-confirm__image"
+            :src="correctionPreviewUrl"
+            :alt="`Backend-rendered bounding box preview for ${correctionImage?.name || 'the image'}`"
+          />
+          <div class="correction-label">
+            <strong>YOLO training label (class x_center y_center width height)</strong>
+            <code>{{ correctionLabelPreview }}</code>
+          </div>
+          <p v-if="correctionError" class="correction-modal__error" role="alert">{{ correctionError }}</p>
+        </div>
+        <footer class="correction-modal__footer">
+          <button
+            class="button button--secondary"
+            type="button"
+            :disabled="isSavingCorrection"
+            @click="closeCorrectionConfirmation"
+          >
+            Cancel
+          </button>
+          <button
+            class="button button--primary"
+            type="button"
+            :disabled="isSavingCorrection"
+            @click="saveCorrectedTrainingData"
+          >
+            {{ isSavingCorrection ? 'Saving…' : 'Confirm and save' }}
+          </button>
+        </footer>
       </section>
     </div>
   </main>
