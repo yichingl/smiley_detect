@@ -3,7 +3,7 @@ import random
 import glob
 from PIL import Image
 
-def augment_and_place(image_path, bg_size=1000):
+def augment_and_place(image_path, bg_size=400):
     """Loads a tight crop, scales, optionally mirrors horizontally, and places it randomly on a canvas."""
     img = Image.open(image_path).convert("L")
     
@@ -23,7 +23,7 @@ def augment_and_place(image_path, bg_size=1000):
     if sw >= bg_size or sh >= bg_size:
         return None, None, None, None, None  # Skip if scaled crop is larger than canvas
         
-    # 3. Create a blank white background canvas (1000x1000)
+    # 3. Create a blank white background canvas (400x400)
     bg = Image.new("L", (bg_size, bg_size), color=255)
     
     # 4. Pick random valid (x, y) coordinates for placement
