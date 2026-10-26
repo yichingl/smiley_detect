@@ -20,8 +20,7 @@ services:
     depends_on:
       - redis
     volumes:
-      # Maps the container's uploaded_images folder to your host machine's folder
-      - ./uploaded_images:/app/uploaded_images
+      - smiley_uploads:/app/uploaded_images
 
   # 3. Celery Background Worker
   worker:
@@ -32,3 +31,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - redis
+    volumes:
+      - smiley_uploads:/app/uploaded_images
+
+volumes:
+  smiley_uploads:
