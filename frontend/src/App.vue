@@ -14,6 +14,7 @@
     guid: string
     detection_count: number
     task_status: string
+    model_name?: string | null
   }
 
   interface Detection {
@@ -160,153 +161,200 @@
 </script>
 
 <template>
-  <main class="min-h-screen bg-slate-100 p-8">
-    <div class="max-w-3xl mx-auto space-y-8">
-      
-      <!-- Header -->
-      <header class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-        <h1 class="text-2xl font-bold text-slate-800">Smiley Detection Dashboard</h1>
-        <p class="text-sm text-slate-500 mt-1">Upload an image and view associated tasks.</p>
+  <main class="dashboard">
+    <div class="dashboard__shell">
+      <header class="page-header">
+        <div class="brand-mark" aria-hidden="true">S</div>
+        <div class="page-header__copy">
+          <p class="eyebrow">IMAGE ANALYSIS</p>
+          <h1>Smiley Detection</h1>
+          <p class="page-header__subtitle">Upload images, run detection, and review your results.</p>
+        </div>
+        <div class="image-count" aria-live="polite">
+          <span class="image-count__value">{{ images.length }}</span>
+          <span>{{ images.length === 1 ? 'image' : 'images' }} in library</span>
+        </div>
       </header>
-      
-      <!-- Upload Section -->
-      <section class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 space-y-4">
-        <h2 class="text-lg font-semibold text-slate-700">Upload Image</h2>
-        
-        <div class="flex items-center space-x-4">
-          <input 
-            type="file" 
-            ref="fileInput"
-            @change="handleFileChange"
-            accept="image/jpeg, image/jpg, image/png"
-            class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
-          />
-          <button 
-            @click="uploadImage"
+
+      <section class="panel upload-panel" aria-labelledby="upload-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">GET STARTED</p>
+            <h2 id="upload-heading">Add an image</h2>
+            <p class="section-description">Choose a JPG or PNG image to run smiley detection.</p>
+          </div>
+          <span class="upload-icon" aria-hidden="true">↑</span>
+        </div>
+
+        <div class="upload-controls">
+          <label class="file-picker" :class="{ 'file-picker--selected': selectedFile }">
+            <input
+              ref="fileInput"
+              type="file"
+              accept="image/jpeg, image/jpg, image/png"
+              @change="handleFileChange"
+            />
+            <span class="file-picker__icon" aria-hidden="true">＋</span>
+            <span class="file-picker__text">
+              <strong>{{ selectedFile ? selectedFile.name : 'Choose an image' }}</strong>
+              <small>{{ selectedFile ? 'Ready to upload' : 'JPG or PNG, select a file from your device' }}</small>
+            </span>
+            <span class="file-picker__action">Browse</span>
+          </label>
+          <button
+            class="button button--primary upload-button"
+            type="button"
             :disabled="isUploading || !selectedFile"
-            class="px-5 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition whitespace-nowrap"
+            @click="uploadImage"
           >
-            {{ isUploading ? 'Uploading...' : 'Upload Image' }}
+            <span v-if="isUploading" class="button-spinner" aria-hidden="true"></span>
+            {{ isUploading ? 'Uploading' : 'Upload image' }}
           </button>
         </div>
 
-        <p v-if="uploadMessage" class="text-sm font-medium" :class="uploadMessage.includes('successfully') ? 'text-green-600' : 'text-red-600'">
+        <p
+          v-if="uploadMessage"
+          class="feedback-message"
+          :class="uploadMessage.includes('successfully') ? 'feedback-message--success' : 'feedback-message--error'"
+          role="status"
+        >
           {{ uploadMessage }}
         </p>
       </section>
 
-      <!-- Uploaded Images List -->
-      <section class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 space-y-4">
-        <div class="flex justify-between items-center">
-          <h2 class="text-lg font-semibold text-slate-700">Uploaded Images</h2>
-          <button 
-            @click="fetchImages" 
-            class="px-3 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg text-xs font-semibold transition border border-slate-200 flex items-center gap-1.5"
-          >
-            🔄 Refresh Images
+      <section class="library-section" aria-labelledby="library-heading">
+        <div class="library-heading">
+          <div>
+            <p class="eyebrow">YOUR WORKSPACE</p>
+            <h2 id="library-heading">Image library</h2>
+            <p class="section-description">Select an image to inspect it and manage detection tasks.</p>
+          </div>
+          <button class="button button--secondary" type="button" @click="fetchImages">
+            <span aria-hidden="true">↻</span>
+            Refresh
           </button>
         </div>
 
-        <div v-if="images.length === 0" class="text-sm text-slate-400 italic">
-          No images uploaded yet.
+        <div v-if="images.length === 0" class="empty-state">
+          <div class="empty-state__icon" aria-hidden="true">▧</div>
+          <h3>Your library is empty</h3>
+          <p>Upload an image above to get started. Your images and detection tasks will appear here.</p>
         </div>
 
-        <div class="space-y-3">
-          <div 
-            v-for="img in images" 
-            :key="img.guid"
-            class="border border-slate-200 rounded-lg p-4 transition hover:border-blue-300 cursor-pointer bg-white"
-            @click="toggleExpand(img)"
-          >
-            <!-- Summary Row -->
-            <div class="flex justify-between items-center">
-              <div>
-                <p class="font-medium text-slate-800">{{ img.name }}</p>
-                <p class="text-xs text-slate-400 font-mono mt-0.5">Path: {{ img.filepath }}</p>
-              </div>
-              <span class="text-xs font-semibold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">
-                {{ expandedImages[img.guid] ? 'Collapse' : 'Expand' }}
+        <div v-else class="image-list">
+          <article v-for="img in images" :key="img.guid" class="image-card">
+            <div class="image-card__summary">
+              <button
+                class="image-card__toggle"
+                type="button"
+                :aria-expanded="!!expandedImages[img.guid]"
+                @click="toggleExpand(img)"
+              >
+                <img class="image-card__thumbnail" :src="`/${img.filepath}`" :alt="`Thumbnail of ${img.name}`" />
+                <span class="image-card__details">
+                  <strong class="image-card__name">{{ img.name }}</strong>
+                  <span class="image-card__path">{{ img.filepath }}</span>
+                </span>
+                <span class="image-card__chevron" :class="{ 'image-card__chevron--expanded': expandedImages[img.guid] }" aria-hidden="true">
+                  ⌄
+                </span>
+              </button>
+              <span class="image-card__task-count">
+                {{ imageDetails[img.guid]?.length ?? 0 }}
+                {{ imageDetails[img.guid]?.length === 1 ? 'task' : 'tasks' }}
               </span>
             </div>
 
-            <!-- Expanded Details -->
-            <div v-if="expandedImages[img.guid]" class="mt-4 pt-4 border-t border-slate-100 space-y-4" @click.stop>
-              <div class="flex gap-4 items-center">
-
-                <!-- Image Preview & 0 Detections Label -->
-                <div class="flex flex-col items-center">
-                  <div class="relative inline-block">
-                    <img 
-                      :src="activeTaskId[img.guid] ? `/tasks/${activeTaskId[img.guid]}/rendered-image` : `/${img.filepath}`" 
-                      alt="Preview" 
-                      class="w-48 h-auto rounded-lg border border-slate-200 block object-cover" 
-                    />
-                  </div>
-                  <!-- Show "0 detections" if a task is selected and detections array is empty -->
-                  <div 
-                    v-if="activeTaskId[img.guid] && activeDetections[img.guid] && activeDetections[img.guid].length === 0" 
-                    class="text-xs text-slate-500 font-medium mt-1.5"
+            <div v-if="expandedImages[img.guid]" class="image-card__content">
+              <div class="image-overview">
+                <div class="preview-frame">
+                  <img
+                    class="preview-frame__image"
+                    :src="activeTaskId[img.guid] ? `/tasks/${activeTaskId[img.guid]}/rendered-image` : `/${img.filepath}`"
+                    :alt="activeTaskId[img.guid] ? `Detection result for ${img.name}` : `Preview of ${img.name}`"
+                  />
+                  <span
+                    v-if="activeTaskId[img.guid] && activeDetections[img.guid]?.length === 0"
+                    class="preview-frame__badge"
                   >
-                    0 detections
-                  </div>
+                    No smileys detected
+                  </span>
                 </div>
 
-                <div class="flex flex-col gap-2">
-                  <button @click="startTaskOnImage(img.guid)" class="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-semibold hover:bg-blue-700 transition">
-                    Start Task
-                  </button>
-                </div>
-                
-                <div>
-                  <p class="text-xs text-slate-500"><span class="font-semibold">GUID:</span> {{ img.guid }}</p>
-                  <p class="text-xs text-slate-500 mt-1"><span class="font-semibold">Group ID:</span> {{ img.upload_group_id }}</p>
-                  <p class="text-xs text-slate-500 mt-1"><span class="font-semibold">Uploaded At:</span> {{ img.uploaded_at ? new Date(img.uploaded_at).toLocaleString() : '--' }}</p>
+                <div class="image-metadata">
+                  <div class="image-metadata__heading">
+                    <div>
+                      <p class="eyebrow">IMAGE DETAILS</p>
+                      <h3>{{ img.name }}</h3>
+                    </div>
+                    <button class="button button--primary" type="button" @click="startTaskOnImage(img.guid)">
+                      Run detection
+                    </button>
+                  </div>
+                  <dl class="metadata-list">
+                    <div>
+                      <dt>Uploaded</dt>
+                      <dd>{{ img.uploaded_at ? new Date(img.uploaded_at).toLocaleString() : '--' }}</dd>
+                    </div>
+                    <div>
+                      <dt>Image ID</dt>
+                      <dd class="metadata-list__id">{{ img.guid }}</dd>
+                    </div>
+                    <div>
+                      <dt>Upload group</dt>
+                      <dd class="metadata-list__id">{{ img.upload_group_id }}</dd>
+                    </div>
+                  </dl>
                 </div>
               </div>
 
-              <!-- Associated Tasks List with Status, Count, and Refresh Button -->
-              <div class="space-y-2">
-                <div class="flex justify-between items-center">
-                  <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500">Associated Tasks</h4>
-                  <button 
-                    @click="fetchTasksForImage(img.guid)" 
-                    class="text-[11px] font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-1 rounded transition border border-blue-100 flex items-center gap-1"
-                  >
-                    🔄 Refresh Tasks
+              <div class="task-section">
+                <div class="task-section__heading">
+                  <div>
+                    <h3>Detection tasks</h3>
+                    <p class="section-description">Choose a task to view its result.</p>
+                  </div>
+                  <button class="button button--text" type="button" @click="fetchTasksForImage(img.guid)">
+                    <span aria-hidden="true">↻</span>
+                    Refresh tasks
                   </button>
                 </div>
 
-                <div v-if="!imageDetails[img.guid] || imageDetails[img.guid].length === 0" class="text-xs text-slate-400 italic">
-                  No tasks associated with this image yet.
+                <div v-if="!imageDetails[img.guid] || imageDetails[img.guid].length === 0" class="task-empty">
+                  No tasks yet. Run detection to create the first task.
                 </div>
-                <ul v-else class="space-y-1.5">
-                  <li 
-                    v-for="task in imageDetails[img.guid]" 
-                    :key="task.guid" 
-                    @click="selectTaskAndFetchDetections(img.guid, task)"
-                    :class="[
-                      'text-xs font-mono px-3 py-2 rounded cursor-pointer transition flex justify-between items-center',
-                      activeTaskId[img.guid] === task.guid ? 'bg-blue-100 text-blue-900 font-bold border border-blue-300' : 'text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200'
-                    ]"
-                  >
-                    <span>{{ task.guid }}</span>
-                    <div class="flex gap-2 items-center">
-                      <span class="px-1.5 py-0.5 bg-white rounded text-[10px] border border-slate-300 font-sans">
-                        Status: {{ task.task_status }}
+                <ul v-else class="task-list">
+                  <li v-for="task in imageDetails[img.guid]" :key="task.guid">
+                    <button
+                      class="task-row"
+                      :class="{ 'task-row--active': activeTaskId[img.guid] === task.guid }"
+                      type="button"
+                      :aria-pressed="activeTaskId[img.guid] === task.guid"
+                      @click="selectTaskAndFetchDetections(img.guid, task)"
+                    >
+                      <span class="task-row__main">
+                        <span class="task-row__id">{{ task.guid }}</span>
+                        <span class="task-row__model">{{ task.model_name || 'Model not recorded' }}</span>
                       </span>
-                      <span class="px-1.5 py-0.5 bg-slate-200 rounded text-[10px] font-sans">
-                        Detections: {{ task.detection_count }}
+                      <span class="task-row__metrics">
+                        <span class="status-badge" :class="`status-badge--${task.task_status.toLowerCase()}`">
+                          {{ task.task_status }}
+                        </span>
+                        <span class="detection-count">
+                          <strong>{{ task.detection_count }}</strong>
+                          {{ task.detection_count === 1 ? 'detection' : 'detections' }}
+                        </span>
                       </span>
-                    </div>
+                    </button>
                   </li>
                 </ul>
               </div>
             </div>
-
-          </div>
+          </article>
         </div>
       </section>
 
+      <footer class="page-footer">Smiley Detection <span aria-hidden="true">·</span> Image analysis workspace</footer>
     </div>
   </main>
 </template>
