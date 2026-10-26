@@ -1,5 +1,9 @@
 from contextlib import asynccontextmanager
+import hashlib
+import json
+import threading
 from typing import List
+from urllib.parse import quote
 
 from uuid import uuid4
 import cv2
@@ -31,6 +35,11 @@ app = FastAPI(
 # 3. Establish the absolute path to your project root
 BASE_DIR = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = BASE_DIR / "uploaded_images"
+VALIDATION_IMAGE_DIR = BASE_DIR / "dataset" / "images" / "val"
+VALIDATION_LABEL_DIR = BASE_DIR / "dataset" / "labels" / "val"
+VALIDATION_CACHE_DIR = BASE_DIR / "data" / "validation_rendered"
+VALIDATION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+VALIDATION_CACHE_LOCK = threading.Lock()
 
 # 4. Ensure the directory physically exists
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -40,6 +49,12 @@ app.mount(
     "/uploaded_images",
     StaticFiles(directory=str(UPLOAD_DIR)),
     name="uploaded_images"
+)
+
+app.mount(
+    "/validation-cache",
+    StaticFiles(directory=str(VALIDATION_CACHE_DIR)),
+    name="validation_cache"
 )
 
 # Welcome message
@@ -193,3 +208,148 @@ def get_rendered_image(task_guid: str, db: Session = Depends(get_db)):
 
     # 6. Return the image directly as an HTTP response
     return Response(content=encoded_image.tobytes(), media_type="image/jpeg")
+
+
+@app.get("/validation-images")
+def get_validation_images(refresh: bool = False):
+    if not VALIDATION_IMAGE_DIR.is_dir():
+        raise HTTPException(status_code=500, detail="Validation image directory not found")
+
+    image_paths = sorted(
+        (
+            path for path in VALIDATION_IMAGE_DIR.iterdir()
+            if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+        ),
+        key=lambda path: path.name.casefold()
+    )
+    if not image_paths:
+        return {"source": "ground_truth_labels", "images": []}
+
+    signature_data = {
+        "source": "ground_truth_labels_v1",
+        "images": [
+            {
+                "name": path.name,
+                "size": path.stat().st_size,
+                "mtime_ns": path.stat().st_mtime_ns,
+                "label_size": (
+                    (VALIDATION_LABEL_DIR / f"{path.stem}.txt").stat().st_size
+                    if (VALIDATION_LABEL_DIR / f"{path.stem}.txt").is_file()
+                    else None
+                ),
+                "label_mtime_ns": (
+                    (VALIDATION_LABEL_DIR / f"{path.stem}.txt").stat().st_mtime_ns
+                    if (VALIDATION_LABEL_DIR / f"{path.stem}.txt").is_file()
+                    else None
+                )
+            }
+            for path in image_paths
+        ]
+    }
+    signature = hashlib.sha256(
+        json.dumps(signature_data, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    manifest_path = VALIDATION_CACHE_DIR / "manifest.json"
+
+    with VALIDATION_CACHE_LOCK:
+        if manifest_path.is_file() and not refresh:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            cached_images = manifest.get("images", [])
+            if (
+                manifest.get("signature") == signature
+                and all((VALIDATION_CACHE_DIR / image["filename"]).is_file() for image in cached_images)
+            ):
+                return {
+                    "source": "ground_truth_labels",
+                    "images": cached_images
+                }
+
+        cache_version = uuid4().hex
+        rendered_images = []
+        for index, image_path in enumerate(image_paths):
+            image = cv2.imread(str(image_path))
+            if image is None:
+                raise HTTPException(status_code=500, detail=f"Failed to decode validation image: {image_path.name}")
+
+            image_height, image_width = image.shape[:2]
+            label_path = VALIDATION_LABEL_DIR / f"{image_path.stem}.txt"
+            detection_count = 0
+            if label_path.is_file():
+                try:
+                    label_lines = label_path.read_text(encoding="utf-8").splitlines()
+                except OSError as exc:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to read validation label file: {label_path.name}"
+                    ) from exc
+
+                for line_number, line in enumerate(label_lines, start=1):
+                    if not line.strip():
+                        continue
+                    fields = line.split()
+                    if len(fields) != 5:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Invalid YOLO label format in {label_path.name}:{line_number}"
+                        )
+
+                    try:
+                        class_value = float(fields[0])
+                        center_x, center_y, box_width, box_height = map(float, fields[1:])
+                    except ValueError as exc:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Non-numeric YOLO label in {label_path.name}:{line_number}"
+                        ) from exc
+
+                    if (
+                        not class_value.is_integer()
+                        or class_value < 0
+                        or not all(0 <= value <= 1 for value in (center_x, center_y, box_width, box_height))
+                    ):
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Out-of-range YOLO label in {label_path.name}:{line_number}"
+                        )
+
+                    class_id = int(class_value)
+                    x_min = max(0, round((center_x - box_width / 2) * image_width))
+                    y_min = max(0, round((center_y - box_height / 2) * image_height))
+                    x_max = min(image_width - 1, round((center_x + box_width / 2) * image_width))
+                    y_max = min(image_height - 1, round((center_y + box_height / 2) * image_height))
+                    cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 0, 255), 2)
+                    label = f"Class {class_id}"
+                    text_pos = (x_min, max(y_min - 8, 15))
+                    cv2.putText(image, label, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    detection_count += 1
+
+            filename = f"{index:04d}-{image_path.stem}.jpg"
+            success, encoded_image = cv2.imencode(".jpg", image)
+            if not success:
+                raise HTTPException(status_code=500, detail=f"Failed to encode validation image: {image_path.name}")
+
+            (VALIDATION_CACHE_DIR / filename).write_bytes(encoded_image.tobytes())
+            rendered_images.append({
+                "name": image_path.name,
+                "filename": filename,
+                "image_url": f"/validation-cache/{quote(filename)}?v={cache_version}",
+                "detection_count": detection_count
+            })
+
+        current_filenames = {image["filename"] for image in rendered_images}
+        for cached_file in VALIDATION_CACHE_DIR.glob("*.jpg"):
+            if cached_file.name not in current_filenames:
+                cached_file.unlink()
+
+        manifest = {
+            "signature": signature,
+            "images": rendered_images
+        }
+        temporary_manifest = VALIDATION_CACHE_DIR / "manifest.tmp"
+        temporary_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+        temporary_manifest.replace(manifest_path)
+
+        return {
+            "source": "ground_truth_labels",
+            "images": rendered_images
+        }

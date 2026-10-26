@@ -14,8 +14,11 @@ export default defineConfig({
         bypass: (req: IncomingMessage) => {
           if (!req.url) return
 
-          // 1. Always let FastAPI handle uploaded images (even though they have extensions like .JPG)
-          if (req.url.startsWith('/uploaded_images/')) {
+          // 1. Always let FastAPI handle backend-served image paths.
+          if (
+            req.url.startsWith('/uploaded_images/') ||
+            req.url.startsWith('/validation-cache/')
+          ) {
             return undefined // Do not bypass -> send to FastAPI (http://localhost:8000)
           }
 
