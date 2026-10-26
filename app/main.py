@@ -38,7 +38,11 @@ UPLOAD_DIR = BASE_DIR / "uploaded_images"
 VALIDATION_IMAGE_DIR = BASE_DIR / "dataset" / "images" / "val"
 VALIDATION_LABEL_DIR = BASE_DIR / "dataset" / "labels" / "val"
 VALIDATION_CACHE_DIR = BASE_DIR / "data" / "validation_rendered"
+TRAINING_IMAGE_DIR = BASE_DIR / "dataset" / "images" / "train"
+TRAINING_LABEL_DIR = BASE_DIR / "dataset" / "labels" / "train"
+TRAINING_CACHE_DIR = BASE_DIR / "data" / "training_rendered"
 VALIDATION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+TRAINING_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 VALIDATION_CACHE_LOCK = threading.Lock()
 
 # 4. Ensure the directory physically exists
@@ -55,6 +59,12 @@ app.mount(
     "/validation-cache",
     StaticFiles(directory=str(VALIDATION_CACHE_DIR)),
     name="validation_cache"
+)
+
+app.mount(
+    "/training-cache",
+    StaticFiles(directory=str(TRAINING_CACHE_DIR)),
+    name="training_cache"
 )
 
 # Welcome message
@@ -212,12 +222,42 @@ def get_rendered_image(task_guid: str, db: Session = Depends(get_db)):
 
 @app.get("/validation-images")
 def get_validation_images(refresh: bool = False):
-    if not VALIDATION_IMAGE_DIR.is_dir():
-        raise HTTPException(status_code=500, detail="Validation image directory not found")
+    return _get_dataset_images(
+        split="validation",
+        image_dir=VALIDATION_IMAGE_DIR,
+        label_dir=VALIDATION_LABEL_DIR,
+        cache_dir=VALIDATION_CACHE_DIR,
+        cache_url_prefix="/validation-cache",
+        refresh=refresh
+    )
+
+
+@app.get("/training-images")
+def get_training_images(refresh: bool = False):
+    return _get_dataset_images(
+        split="training",
+        image_dir=TRAINING_IMAGE_DIR,
+        label_dir=TRAINING_LABEL_DIR,
+        cache_dir=TRAINING_CACHE_DIR,
+        cache_url_prefix="/training-cache",
+        refresh=refresh
+    )
+
+
+def _get_dataset_images(
+    split: str,
+    image_dir: Path,
+    label_dir: Path,
+    cache_dir: Path,
+    cache_url_prefix: str,
+    refresh: bool
+):
+    if not image_dir.is_dir():
+        raise HTTPException(status_code=500, detail=f"{split.capitalize()} image directory not found")
 
     image_paths = sorted(
         (
-            path for path in VALIDATION_IMAGE_DIR.iterdir()
+            path for path in image_dir.iterdir()
             if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png"}
         ),
         key=lambda path: path.name.casefold()
@@ -226,20 +266,20 @@ def get_validation_images(refresh: bool = False):
         return {"source": "ground_truth_labels", "images": []}
 
     signature_data = {
-        "source": "ground_truth_labels_v1",
+        "source": f"ground_truth_labels_v1:{split}",
         "images": [
             {
                 "name": path.name,
                 "size": path.stat().st_size,
                 "mtime_ns": path.stat().st_mtime_ns,
                 "label_size": (
-                    (VALIDATION_LABEL_DIR / f"{path.stem}.txt").stat().st_size
-                    if (VALIDATION_LABEL_DIR / f"{path.stem}.txt").is_file()
+                    (label_dir / f"{path.stem}.txt").stat().st_size
+                    if (label_dir / f"{path.stem}.txt").is_file()
                     else None
                 ),
                 "label_mtime_ns": (
-                    (VALIDATION_LABEL_DIR / f"{path.stem}.txt").stat().st_mtime_ns
-                    if (VALIDATION_LABEL_DIR / f"{path.stem}.txt").is_file()
+                    (label_dir / f"{path.stem}.txt").stat().st_mtime_ns
+                    if (label_dir / f"{path.stem}.txt").is_file()
                     else None
                 )
             }
@@ -249,7 +289,7 @@ def get_validation_images(refresh: bool = False):
     signature = hashlib.sha256(
         json.dumps(signature_data, sort_keys=True).encode("utf-8")
     ).hexdigest()
-    manifest_path = VALIDATION_CACHE_DIR / "manifest.json"
+    manifest_path = cache_dir / "manifest.json"
 
     with VALIDATION_CACHE_LOCK:
         if manifest_path.is_file() and not refresh:
@@ -257,7 +297,7 @@ def get_validation_images(refresh: bool = False):
             cached_images = manifest.get("images", [])
             if (
                 manifest.get("signature") == signature
-                and all((VALIDATION_CACHE_DIR / image["filename"]).is_file() for image in cached_images)
+                and all((cache_dir / image["filename"]).is_file() for image in cached_images)
             ):
                 return {
                     "source": "ground_truth_labels",
@@ -269,10 +309,10 @@ def get_validation_images(refresh: bool = False):
         for index, image_path in enumerate(image_paths):
             image = cv2.imread(str(image_path))
             if image is None:
-                raise HTTPException(status_code=500, detail=f"Failed to decode validation image: {image_path.name}")
+                raise HTTPException(status_code=500, detail=f"Failed to decode {split} image: {image_path.name}")
 
             image_height, image_width = image.shape[:2]
-            label_path = VALIDATION_LABEL_DIR / f"{image_path.stem}.txt"
+            label_path = label_dir / f"{image_path.stem}.txt"
             detection_count = 0
             if label_path.is_file():
                 try:
@@ -326,18 +366,18 @@ def get_validation_images(refresh: bool = False):
             filename = f"{index:04d}-{image_path.stem}.jpg"
             success, encoded_image = cv2.imencode(".jpg", image)
             if not success:
-                raise HTTPException(status_code=500, detail=f"Failed to encode validation image: {image_path.name}")
+                raise HTTPException(status_code=500, detail=f"Failed to encode {split} image: {image_path.name}")
 
-            (VALIDATION_CACHE_DIR / filename).write_bytes(encoded_image.tobytes())
+            (cache_dir / filename).write_bytes(encoded_image.tobytes())
             rendered_images.append({
                 "name": image_path.name,
                 "filename": filename,
-                "image_url": f"/validation-cache/{quote(filename)}?v={cache_version}",
+                "image_url": f"{cache_url_prefix}/{quote(filename)}?v={cache_version}",
                 "detection_count": detection_count
             })
 
         current_filenames = {image["filename"] for image in rendered_images}
-        for cached_file in VALIDATION_CACHE_DIR.glob("*.jpg"):
+        for cached_file in cache_dir.glob("*.jpg"):
             if cached_file.name not in current_filenames:
                 cached_file.unlink()
 
@@ -345,7 +385,7 @@ def get_validation_images(refresh: bool = False):
             "signature": signature,
             "images": rendered_images
         }
-        temporary_manifest = VALIDATION_CACHE_DIR / "manifest.tmp"
+        temporary_manifest = cache_dir / "manifest.tmp"
         temporary_manifest.write_text(json.dumps(manifest), encoding="utf-8")
         temporary_manifest.replace(manifest_path)
 

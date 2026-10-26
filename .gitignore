@@ -37,6 +37,8 @@ uploaded_images/*
 # (Optional: ignore large local dataset files if not tracked in Git)
 # ==========================================
 dataset/*
+data/training_rendered/
+data/validation_rendered/
 
 # ==========================================
 # IDE & Editor Specific Files

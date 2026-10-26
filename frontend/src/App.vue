@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { onMounted, ref } from 'vue'
+  import { computed, onMounted, ref } from 'vue'
 
   // interfaces
   interface InferenceImage {
@@ -26,18 +26,33 @@
     y_max: number
   }
 
-  interface ValidationImage {
+  interface DatasetImage {
     name: string
     image_url: string
     detection_count: number
   }
 
   // variables
-  const activeTab = ref<'home' | 'validation'>('home')
+  const activeTab = ref<'home' | 'validation' | 'training'>('home')
   const images = ref<InferenceImage[]>([])
-  const validationImages = ref<ValidationImage[]>([])
+  const validationImages = ref<DatasetImage[]>([])
+  const trainingImages = ref<DatasetImage[]>([])
   const isLoadingValidationImages = ref(false)
+  const isLoadingTrainingImages = ref(false)
   const validationImagesError = ref('')
+  const trainingImagesError = ref('')
+  const validationImagesLoaded = ref(false)
+  const trainingImagesLoaded = ref(false)
+  const activeDatasetSplit = computed(() => activeTab.value === 'training' ? 'training' : 'validation')
+  const activeDatasetImages = computed(() =>
+    activeDatasetSplit.value === 'training' ? trainingImages.value : validationImages.value
+  )
+  const isLoadingDatasetImages = computed(() =>
+    activeDatasetSplit.value === 'training' ? isLoadingTrainingImages.value : isLoadingValidationImages.value
+  )
+  const datasetImagesError = computed(() =>
+    activeDatasetSplit.value === 'training' ? trainingImagesError.value : validationImagesError.value
+  )
   const expandedImages = ref<Record<string, boolean>>({})
   const imageDetails = ref<Record<string, TaskInfo[]>>({})
 
@@ -63,30 +78,38 @@
     }
   }
 
-  const fetchValidationImages = async (refresh = false) => {
-    isLoadingValidationImages.value = true
-    validationImagesError.value = ''
+  const fetchDatasetImages = async (split: 'training' | 'validation', refresh = false) => {
+    const loading = split === 'training' ? isLoadingTrainingImages : isLoadingValidationImages
+    const error = split === 'training' ? trainingImagesError : validationImagesError
+    const loaded = split === 'training' ? trainingImagesLoaded : validationImagesLoaded
+    const datasetImages = split === 'training' ? trainingImages : validationImages
+    loading.value = true
+    error.value = ''
 
     try {
-      const response = await fetch(`/validation-images${refresh ? '?refresh=true' : ''}`)
+      const response = await fetch(`/${split}-images${refresh ? '?refresh=true' : ''}`)
       if (!response.ok) {
-        throw new Error(`Validation images request failed with status ${response.status}`)
+        throw new Error(`${split} images request failed with status ${response.status}`)
       }
 
       const data = await response.json()
-      validationImages.value = data.images || []
+      datasetImages.value = data.images || []
+      loaded.value = true
     } catch (err) {
-      validationImagesError.value = 'Could not load validation images. Please try again.'
-      console.error('Failed to fetch validation images:', err)
+      error.value = `Could not load ${split} images. Please try again.`
+      console.error(`Failed to fetch ${split} images:`, err)
     } finally {
-      isLoadingValidationImages.value = false
+      loading.value = false
     }
   }
 
-  const selectTab = async (tab: 'home' | 'validation') => {
+  const selectTab = async (tab: 'home' | 'validation' | 'training') => {
     activeTab.value = tab
-    if (tab === 'validation' && validationImages.value.length === 0 && !isLoadingValidationImages.value) {
-      await fetchValidationImages()
+    if (
+      tab !== 'home' &&
+      !(tab === 'training' ? trainingImagesLoaded.value : validationImagesLoaded.value)
+    ) {
+      await fetchDatasetImages(tab)
     }
   }
 
@@ -231,6 +254,15 @@
           @click="selectTab('validation')"
         >
           Validation Data
+        </button>
+        <button
+          class="tab-nav__button"
+          :class="{ 'tab-nav__button--active': activeTab === 'training' }"
+          type="button"
+          :aria-current="activeTab === 'training' ? 'page' : undefined"
+          @click="selectTab('training')"
+        >
+          Training Data
         </button>
       </nav>
 
@@ -414,13 +446,13 @@
       </section>
       </div>
 
-      <section v-else class="validation-section" aria-labelledby="validation-heading">
+      <section v-else class="validation-section" aria-labelledby="dataset-heading">
         <div class="library-heading">
           <div>
-            <p class="eyebrow">MODEL VALIDATION</p>
-            <h2 id="validation-heading">Validation Data</h2>
+            <p class="eyebrow">{{ activeDatasetSplit === 'training' ? 'MODEL TRAINING' : 'MODEL VALIDATION' }}</p>
+            <h2 id="dataset-heading">{{ activeDatasetSplit === 'training' ? 'Training Data' : 'Validation Data' }}</h2>
             <p class="section-description">
-              Validation images with their annotated bounding boxes.
+              {{ activeDatasetSplit === 'training' ? 'Training' : 'Validation' }} images with their annotated bounding boxes.
             </p>
             <p class="validation-disclaimer">
               These boxes are drawn from the dataset’s ground-truth label files. They are not model predictions.
@@ -429,34 +461,34 @@
           <button
             class="button button--secondary"
             type="button"
-            :disabled="isLoadingValidationImages"
-            @click="fetchValidationImages(true)"
+            :disabled="isLoadingDatasetImages"
+            @click="fetchDatasetImages(activeDatasetSplit, true)"
           >
             <span aria-hidden="true">↻</span>
             Refresh
           </button>
         </div>
 
-        <div v-if="isLoadingValidationImages" class="validation-loading" role="status" aria-live="polite">
+        <div v-if="isLoadingDatasetImages" class="validation-loading" role="status" aria-live="polite">
           <span class="validation-spinner" aria-hidden="true"></span>
-          <span>Preparing validation images…</span>
+          <span>Preparing {{ activeDatasetSplit }} images…</span>
         </div>
 
-        <div v-else-if="validationImagesError" class="validation-error" role="alert">
-          <p>{{ validationImagesError }}</p>
-          <button class="button button--secondary" type="button" @click="fetchValidationImages()">
+        <div v-else-if="datasetImagesError" class="validation-error" role="alert">
+          <p>{{ datasetImagesError }}</p>
+          <button class="button button--secondary" type="button" @click="fetchDatasetImages(activeDatasetSplit)">
             Try again
           </button>
         </div>
 
-        <div v-else-if="validationImages.length === 0" class="empty-state">
+        <div v-else-if="activeDatasetImages.length === 0" class="empty-state">
           <div class="empty-state__icon" aria-hidden="true">▧</div>
-          <h3>No validation images found</h3>
-          <p>Place JPG or PNG files and matching YOLO label files in the validation dataset.</p>
+          <h3>No {{ activeDatasetSplit }} images found</h3>
+          <p>Place JPG or PNG files and matching YOLO label files in the {{ activeDatasetSplit }} dataset.</p>
         </div>
 
         <div v-else class="validation-grid">
-          <article v-for="img in validationImages" :key="img.name" class="validation-card">
+          <article v-for="img in activeDatasetImages" :key="img.name" class="validation-card">
             <div class="validation-card__image">
               <img :src="img.image_url" :alt="`Ground-truth bounding boxes for ${img.name}`" />
             </div>

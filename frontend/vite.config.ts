@@ -17,7 +17,8 @@ export default defineConfig({
           // 1. Always let FastAPI handle backend-served image paths.
           if (
             req.url.startsWith('/uploaded_images/') ||
-            req.url.startsWith('/validation-cache/')
+            req.url.startsWith('/validation-cache/') ||
+            req.url.startsWith('/training-cache/')
           ) {
             return undefined // Do not bypass -> send to FastAPI (http://localhost:8000)
           }
