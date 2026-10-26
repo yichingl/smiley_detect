@@ -490,7 +490,12 @@
         <div v-else class="validation-grid">
           <article v-for="img in activeDatasetImages" :key="img.name" class="validation-card">
             <div class="validation-card__image">
-              <img :src="img.image_url" :alt="`Ground-truth bounding boxes for ${img.name}`" />
+              <img
+                :src="img.image_url"
+                :alt="`Ground-truth bounding boxes for ${img.name}`"
+                loading="lazy"
+                decoding="async"
+              />
             </div>
             <div class="validation-card__details">
               <h3>{{ img.name }}</h3>

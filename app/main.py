@@ -67,6 +67,15 @@ app.mount(
     name="training_cache"
 )
 
+
+@app.middleware("http")
+async def cache_rendered_images(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith(("/validation-cache/", "/training-cache/")):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
+
 # Welcome message
 @app.get("/")
 def read_root():
