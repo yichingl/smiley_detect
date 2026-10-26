@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import csv
 import hashlib
 import json
 import threading
@@ -41,6 +42,7 @@ VALIDATION_CACHE_DIR = BASE_DIR / "data" / "validation_rendered"
 TRAINING_IMAGE_DIR = BASE_DIR / "dataset" / "images" / "train"
 TRAINING_LABEL_DIR = BASE_DIR / "dataset" / "labels" / "train"
 TRAINING_CACHE_DIR = BASE_DIR / "data" / "training_rendered"
+SAVED_MODELS_DIR = BASE_DIR / "saved_models"
 VALIDATION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 TRAINING_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 VALIDATION_CACHE_LOCK = threading.Lock()
@@ -251,6 +253,68 @@ def get_training_images(refresh: bool = False):
         cache_url_prefix="/training-cache",
         refresh=refresh
     )
+
+
+@app.get("/models")
+def get_model_runs():
+    if not SAVED_MODELS_DIR.is_dir():
+        return {"runs": []}
+
+    metric_columns = {
+        "train_box_loss": "train/box_loss",
+        "val_box_loss": "val/box_loss",
+        "precision": "metrics/precision(B)",
+        "recall": "metrics/recall(B)",
+        "map50": "metrics/mAP50(B)",
+        "map50_95": "metrics/mAP50-95(B)"
+    }
+    runs = []
+    for run_dir in sorted(
+        (path for path in SAVED_MODELS_DIR.iterdir() if path.is_dir()),
+        key=lambda path: path.name.casefold()
+    ):
+        note_path = run_dir / "note.txt"
+        try:
+            note = note_path.read_text(encoding="utf-8").strip() if note_path.is_file() else None
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to read note for model run: {run_dir.name}") from exc
+
+        epochs = []
+        results_path = run_dir / "results.csv"
+        if results_path.is_file():
+            try:
+                with results_path.open("r", encoding="utf-8", newline="") as results_file:
+                    reader = csv.DictReader(results_file)
+                    missing_columns = set(metric_columns.values()) - set(reader.fieldnames or [])
+                    if missing_columns:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Missing metrics in {run_dir.name}/results.csv: {', '.join(sorted(missing_columns))}"
+                        )
+
+                    for row_number, row in enumerate(reader, start=2):
+                        try:
+                            epoch = int(row["epoch"])
+                            values = {
+                                key: float(row[column])
+                                for key, column in metric_columns.items()
+                            }
+                        except (KeyError, TypeError, ValueError) as exc:
+                            raise HTTPException(
+                                status_code=500,
+                                detail=f"Invalid metric value in {run_dir.name}/results.csv:{row_number}"
+                            ) from exc
+                        epochs.append({"epoch": epoch, **values})
+            except OSError as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to read results for model run: {run_dir.name}") from exc
+
+        runs.append({
+            "name": run_dir.name,
+            "note": note or None,
+            "epochs": epochs
+        })
+
+    return {"runs": runs}
 
 
 def _get_dataset_images(

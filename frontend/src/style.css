@@ -862,6 +862,89 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+.models-section {
+  margin-top: 4px;
+}
+
+.model-run-list {
+  display: grid;
+  gap: 16px;
+}
+
+.model-run {
+  overflow: hidden;
+  border: 1px solid #e5eaf2;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(29, 48, 82, 0.035);
+}
+
+.model-run__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #edf0f5;
+}
+
+.model-run__header h3 {
+  overflow: hidden;
+  margin: 0;
+  color: #344258;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-run__epoch-count {
+  flex: 0 0 auto;
+  color: #7b8799;
+  font-size: 10px;
+}
+
+.model-run__table-wrap {
+  overflow-x: auto;
+}
+
+.model-run__table {
+  width: 100%;
+  border-collapse: collapse;
+  color: #526178;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.model-run__table th,
+.model-run__table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid #edf0f5;
+}
+
+.model-run__table thead th {
+  color: #73819a;
+  background: #f8faff;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.model-run__table tbody th {
+  color: #344258;
+  font-weight: 600;
+}
+
+.model-run__table tbody tr:last-child th,
+.model-run__table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.model-run__table tbody tr:hover {
+  background: #f8faff;
+}
+
 @media (max-width: 640px) {
   .dashboard {
     padding: 28px 15px 24px;

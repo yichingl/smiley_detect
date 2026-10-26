@@ -5,6 +5,7 @@ SHELL := powershell.exe
 venv:
 	py -3.11 -m venv venv
 	@echo "Virtual environment created with Python 3.11."
+	Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", ". .\venv\Scripts\Activate.ps1"
 
 install: venv
 	.\venv\Scripts\pip install --upgrade pip

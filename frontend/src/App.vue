@@ -32,9 +32,29 @@
     detection_count: number
   }
 
+  interface ModelEpoch {
+    epoch: number
+    train_box_loss: number
+    val_box_loss: number
+    precision: number
+    recall: number
+    map50: number
+    map50_95: number
+  }
+
+  interface ModelRun {
+    name: string
+    note: string | null
+    epochs: ModelEpoch[]
+  }
+
   // variables
-  const activeTab = ref<'home' | 'validation' | 'training'>('home')
+  const activeTab = ref<'home' | 'validation' | 'training' | 'models'>('home')
   const images = ref<InferenceImage[]>([])
+  const modelRuns = ref<ModelRun[]>([])
+  const isLoadingModels = ref(false)
+  const modelsError = ref('')
+  const modelsLoaded = ref(false)
   const validationImages = ref<DatasetImage[]>([])
   const trainingImages = ref<DatasetImage[]>([])
   const isLoadingValidationImages = ref(false)
@@ -78,6 +98,29 @@
     }
   }
 
+  const fetchModels = async () => {
+    isLoadingModels.value = true
+    modelsError.value = ''
+
+    try {
+      const response = await fetch('/models')
+      if (!response.ok) {
+        throw new Error(`Models request failed with status ${response.status}`)
+      }
+
+      const data = await response.json()
+      modelRuns.value = data.runs || []
+      modelsLoaded.value = true
+    } catch (err) {
+      modelsError.value = 'Could not load model runs. Please try again.'
+      console.error('Failed to fetch model runs:', err)
+    } finally {
+      isLoadingModels.value = false
+    }
+  }
+
+  const formatMetric = (value: number) => value.toFixed(4)
+
   const fetchDatasetImages = async (split: 'training' | 'validation', refresh = false) => {
     const loading = split === 'training' ? isLoadingTrainingImages : isLoadingValidationImages
     const error = split === 'training' ? trainingImagesError : validationImagesError
@@ -103,10 +146,12 @@
     }
   }
 
-  const selectTab = async (tab: 'home' | 'validation' | 'training') => {
+  const selectTab = async (tab: 'home' | 'validation' | 'training' | 'models') => {
     activeTab.value = tab
-    if (
-      tab !== 'home' &&
+    if (tab === 'models' && !modelsLoaded.value) {
+      await fetchModels()
+    } else if (
+      (tab === 'training' || tab === 'validation') &&
       !(tab === 'training' ? trainingImagesLoaded.value : validationImagesLoaded.value)
     ) {
       await fetchDatasetImages(tab)
@@ -263,6 +308,15 @@
           @click="selectTab('training')"
         >
           Training Data
+        </button>
+        <button
+          class="tab-nav__button"
+          :class="{ 'tab-nav__button--active': activeTab === 'models' }"
+          type="button"
+          :aria-current="activeTab === 'models' ? 'page' : undefined"
+          @click="selectTab('models')"
+        >
+          Models
         </button>
       </nav>
 
@@ -446,7 +500,7 @@
       </section>
       </div>
 
-      <section v-else class="validation-section" aria-labelledby="dataset-heading">
+      <section v-else-if="activeTab !== 'models'" class="validation-section" aria-labelledby="dataset-heading">
         <div class="library-heading">
           <div>
             <p class="eyebrow">{{ activeDatasetSplit === 'training' ? 'MODEL TRAINING' : 'MODEL VALIDATION' }}</p>
@@ -503,6 +557,83 @@
                 <strong>{{ img.detection_count }}</strong>
                 {{ img.detection_count === 1 ? 'detection' : 'detections' }}
               </span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section v-else class="models-section" aria-labelledby="models-heading">
+        <div class="library-heading">
+          <div>
+            <p class="eyebrow">TRAINING HISTORY</p>
+            <h2 id="models-heading">Model runs</h2>
+            <p class="section-description">Training and validation metrics for each saved run.</p>
+          </div>
+          <button
+            class="button button--secondary"
+            type="button"
+            :disabled="isLoadingModels"
+            @click="fetchModels"
+          >
+            <span aria-hidden="true">↻</span>
+            Refresh
+          </button>
+        </div>
+
+        <div v-if="isLoadingModels" class="validation-loading" role="status" aria-live="polite">
+          <span class="validation-spinner" aria-hidden="true"></span>
+          <span>Loading model runs…</span>
+        </div>
+
+        <div v-else-if="modelsError" class="validation-error" role="alert">
+          <p>{{ modelsError }}</p>
+          <button class="button button--secondary" type="button" @click="fetchModels">
+            Try again
+          </button>
+        </div>
+
+        <div v-else-if="modelRuns.length === 0" class="empty-state">
+          <div class="empty-state__icon" aria-hidden="true">▧</div>
+          <h3>No model runs found</h3>
+          <p>Saved training runs with results.csv files will appear here.</p>
+        </div>
+
+        <div v-else class="model-run-list">
+          <article v-for="run in modelRuns" :key="run.name" class="model-run">
+            <header class="model-run__header">
+              <h3 :title="run.note || undefined">{{ run.name }}</h3>
+              <span class="model-run__epoch-count">
+                {{ run.epochs.length }} {{ run.epochs.length === 1 ? 'epoch' : 'epochs' }}
+              </span>
+            </header>
+            <div v-if="run.epochs.length === 0" class="task-empty">
+              No epoch metrics found for this run.
+            </div>
+            <div v-else class="model-run__table-wrap">
+              <table class="model-run__table">
+                <thead>
+                  <tr>
+                    <th scope="col">Epoch</th>
+                    <th scope="col">Train box</th>
+                    <th scope="col">Validation box</th>
+                    <th scope="col">Precision</th>
+                    <th scope="col">Recall</th>
+                    <th scope="col">mAP50</th>
+                    <th scope="col">mAP50–95</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="epoch in run.epochs" :key="epoch.epoch">
+                    <th scope="row">{{ epoch.epoch }}</th>
+                    <td>{{ formatMetric(epoch.train_box_loss) }}</td>
+                    <td>{{ formatMetric(epoch.val_box_loss) }}</td>
+                    <td>{{ formatMetric(epoch.precision) }}</td>
+                    <td>{{ formatMetric(epoch.recall) }}</td>
+                    <td>{{ formatMetric(epoch.map50) }}</td>
+                    <td>{{ formatMetric(epoch.map50_95) }}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </article>
         </div>
