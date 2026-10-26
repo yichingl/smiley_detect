@@ -7,7 +7,7 @@ from ultralytics import YOLO
 from app.celery_app import celery_app
 from app.database import SessionLocal
 import app.repositories as repo
-from app.models import DetectionResult, InferenceImage
+from app.models import DetectionResult, InferenceImage, InferenceTask
 
 CONFIDENCE_THRESHOLD = 0.75
 
@@ -93,9 +93,17 @@ def process_sample_image(task_identifier: str, task_id: int, model_name: str):
         db.close()
         return {"error": f"Model run '{model_name}' was not found or has no best checkpoint."}
 
+    inference_image = repo.get_inference_image_by_task_id(db, task_id)
+    if inference_image is None:
+        db.close()
+        raise RuntimeError(
+            f"Task {task_id} has no associated image in this worker's database. "
+            "The API and worker must use the same DATABASE_URL and REDIS_URL."
+        )
+
     time.sleep(6)
     print("Starting Processing")
-    task_update: InferenceImage | None = repo.update_inference_task(
+    task_update: InferenceTask | None = repo.update_inference_task(
         db,
         task_id,
         "PROCESSING",
@@ -103,7 +111,7 @@ def process_sample_image(task_identifier: str, task_id: int, model_name: str):
     )
 
     time.sleep(6)
-    image_path = repo.get_inference_image_by_task_id(db, task_id).filepath
+    image_path = inference_image.filepath
     detected_locations = run_localization_inference(image_path, str(model_path))
 
     print("Detections...")
