@@ -45,13 +45,54 @@
   interface ModelRun {
     name: string
     note: string | null
+    available: boolean
+    best_epoch: number | null
     epochs: ModelEpoch[]
+  }
+
+  const readCachedModelRuns = (): ModelRun[] => {
+    try {
+      const cachedModels = localStorage.getItem('smiley-model-runs')
+      const parsedModels: unknown = cachedModels ? JSON.parse(cachedModels) : []
+      return Array.isArray(parsedModels)
+        ? parsedModels.filter((run): run is ModelRun =>
+            typeof run?.name === 'string' &&
+            Array.isArray(run.epochs) &&
+            typeof run.available === 'boolean' &&
+            (typeof run.best_epoch === 'number' || run.best_epoch === null)
+          )
+        : []
+    } catch (err) {
+      console.warn('Could not read cached model runs:', err)
+      return []
+    }
+  }
+
+  const readSelectedModel = () => {
+    try {
+      return localStorage.getItem('smiley-selected-model') || ''
+    } catch (err) {
+      console.warn('Could not read selected model:', err)
+      return ''
+    }
+  }
+
+  const writeBrowserCache = (key: string, value: string) => {
+    try {
+      localStorage.setItem(key, value)
+    } catch (err) {
+      console.warn(`Could not save ${key} in browser storage:`, err)
+    }
   }
 
   // variables
   const activeTab = ref<'home' | 'validation' | 'training' | 'models'>('home')
   const images = ref<InferenceImage[]>([])
-  const modelRuns = ref<ModelRun[]>([])
+  const modelRuns = ref<ModelRun[]>(readCachedModelRuns())
+  const selectedModel = ref(
+    readSelectedModel() || modelRuns.value.find((run) => run.available)?.name || ''
+  )
+  const isModelPickerOpen = ref(false)
   const isLoadingModels = ref(false)
   const modelsError = ref('')
   const modelsLoaded = ref(false)
@@ -110,16 +151,48 @@
 
       const data = await response.json()
       modelRuns.value = data.runs || []
+      writeBrowserCache('smiley-model-runs', JSON.stringify(modelRuns.value))
+      const selectedModelExists = modelRuns.value.some(
+        (run) => run.name === selectedModel.value && run.available
+      )
+      if (!selectedModelExists) {
+        selectedModel.value = modelRuns.value.find((run) => run.available)?.name || ''
+        writeBrowserCache('smiley-selected-model', selectedModel.value)
+      }
       modelsLoaded.value = true
     } catch (err) {
       modelsError.value = 'Could not load model runs. Please try again.'
       console.error('Failed to fetch model runs:', err)
+      if (modelRuns.value.length === 0) {
+        modelsLoaded.value = false
+      }
     } finally {
       isLoadingModels.value = false
     }
   }
 
   const formatMetric = (value: number) => value.toFixed(4)
+
+  const getBestEpoch = (run: ModelRun) =>
+    run.epochs.find((epoch) => epoch.epoch === run.best_epoch)
+
+  const getBestEpochRows = (run: ModelRun) => {
+    const epoch = getBestEpoch(run)
+    return epoch ? [epoch] : []
+  }
+
+  const chooseModel = (modelName: string) => {
+    selectedModel.value = modelName
+    writeBrowserCache('smiley-selected-model', modelName)
+    isModelPickerOpen.value = false
+  }
+
+  const openModelPicker = async () => {
+    isModelPickerOpen.value = true
+    if (modelRuns.value.length === 0 && !isLoadingModels.value) {
+      await fetchModels()
+    }
+  }
 
   const fetchDatasetImages = async (split: 'training' | 'validation', refresh = false) => {
     const loading = split === 'training' ? isLoadingTrainingImages : isLoadingValidationImages
@@ -148,7 +221,7 @@
 
   const selectTab = async (tab: 'home' | 'validation' | 'training' | 'models') => {
     activeTab.value = tab
-    if (tab === 'models' && !modelsLoaded.value) {
+    if (tab === 'models' && !modelsLoaded.value && !isLoadingModels.value) {
       await fetchModels()
     } else if (
       (tab === 'training' || tab === 'validation') &&
@@ -231,10 +304,20 @@
 
   // Start a task for the image guid
   const startTaskOnImage = async (imgGuid: string) => {
+    if (!selectedModel.value) {
+      isModelPickerOpen.value = true
+      return
+    }
+
     try {
-      const response = await fetch(`/process-image/${imgGuid}`, { method: 'POST' })
+      const response = await fetch(`/process-image/${imgGuid}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_name: selectedModel.value })
+      })
       if (!response.ok) {
-        throw new Error(`Server returned status ${response.status}`)
+        const error = await response.json()
+        throw new Error(error.detail || `Server returned status ${response.status}`)
       }
       // Automatically refresh tasks list after starting a new task
       await fetchTasksForImage(imgGuid)
@@ -262,6 +345,7 @@
 
   onMounted(() => {
     fetchImages()
+    fetchModels()
   })
 </script>
 
@@ -319,6 +403,16 @@
           Models
         </button>
       </nav>
+
+      <section class="selected-model" aria-label="Selected detection model">
+        <div>
+          <p class="eyebrow">SELECTED MODEL</p>
+          <strong>{{ selectedModel || 'No model selected' }}</strong>
+        </div>
+        <button class="button button--secondary" type="button" @click="openModelPicker">
+          Edit
+        </button>
+      </section>
 
       <div v-if="activeTab === 'home'">
       <section class="panel upload-panel" aria-labelledby="upload-heading">
@@ -601,10 +695,13 @@
         <div v-else class="model-run-list">
           <article v-for="run in modelRuns" :key="run.name" class="model-run">
             <header class="model-run__header">
-              <h3 :title="run.note || undefined">{{ run.name }}</h3>
-              <span class="model-run__epoch-count">
-                {{ run.epochs.length }} {{ run.epochs.length === 1 ? 'epoch' : 'epochs' }}
-              </span>
+              <div class="model-run__title">
+                <h3 :title="run.note || undefined">{{ run.name }}</h3>
+                <span v-if="run.best_epoch !== null" class="model-run__best">
+                  Best - Epoch {{ run.best_epoch }}
+                </span>
+              </div>
+              <span class="model-run__epoch-count">{{ run.epochs.length }} epochs</span>
             </header>
             <div v-if="run.epochs.length === 0" class="task-empty">
               No epoch metrics found for this run.
@@ -623,7 +720,11 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="epoch in run.epochs" :key="epoch.epoch">
+                  <tr
+                    v-for="epoch in run.epochs"
+                    :key="epoch.epoch"
+                    :class="{ 'model-run__best-row': epoch.epoch === run.best_epoch }"
+                  >
                     <th scope="row">{{ epoch.epoch }}</th>
                     <td>{{ formatMetric(epoch.train_box_loss) }}</td>
                     <td>{{ formatMetric(epoch.val_box_loss) }}</td>
@@ -640,6 +741,94 @@
       </section>
 
       <footer class="page-footer">Smiley Detection <span aria-hidden="true">·</span> Image analysis workspace</footer>
+    </div>
+
+    <div
+      v-if="isModelPickerOpen"
+      class="model-picker-backdrop"
+      role="presentation"
+      @click.self="isModelPickerOpen = false"
+    >
+      <section
+        class="model-picker"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="model-picker-heading"
+      >
+        <header class="model-picker__header">
+          <div>
+            <p class="eyebrow">INFERENCE SETTINGS</p>
+            <h2 id="model-picker-heading">Select a model</h2>
+            <p class="section-description">Choose a saved training run. Metrics shown are from its best.pt checkpoint.</p>
+          </div>
+          <button
+            class="model-picker__close"
+            type="button"
+            aria-label="Close model picker"
+            @click="isModelPickerOpen = false"
+          >
+            ×
+          </button>
+        </header>
+
+        <div v-if="modelRuns.length === 0" class="task-empty">
+          No saved models are cached yet. Check the Models tab or retry loading the model list.
+        </div>
+        <div v-else class="model-picker__runs">
+          <article v-for="run in modelRuns" :key="run.name" class="model-picker__run">
+            <div class="model-picker__run-heading">
+              <div class="model-run__title">
+                <h3 :title="run.note || undefined">{{ run.name }}</h3>
+                <span v-if="run.best_epoch !== null" class="model-run__best">
+                  Best - Epoch {{ run.best_epoch }}
+                </span>
+                <p v-if="!run.available" class="model-picker__unavailable">
+                  No best.pt checkpoint is available for this run.
+                </p>
+              </div>
+              <button
+                class="button"
+                :class="selectedModel === run.name ? 'button--primary' : 'button--secondary'"
+                type="button"
+                :disabled="!run.available"
+                @click="chooseModel(run.name)"
+              >
+                {{ selectedModel === run.name ? 'Selected' : 'Use this model' }}
+              </button>
+            </div>
+            <div v-if="getBestEpoch(run)" class="model-run__table-wrap">
+              <table class="model-run__table">
+                <thead>
+                  <tr>
+                    <th scope="col">Epoch</th>
+                    <th scope="col">Train box</th>
+                    <th scope="col">Validation box</th>
+                    <th scope="col">Precision</th>
+                    <th scope="col">Recall</th>
+                    <th scope="col">mAP50</th>
+                    <th scope="col">mAP50–95</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="epoch in getBestEpochRows(run)"
+                    :key="epoch.epoch"
+                    class="model-run__best-row"
+                  >
+                    <th scope="row">{{ epoch.epoch }}</th>
+                    <td>{{ formatMetric(epoch.train_box_loss) }}</td>
+                    <td>{{ formatMetric(epoch.val_box_loss) }}</td>
+                    <td>{{ formatMetric(epoch.precision) }}</td>
+                    <td>{{ formatMetric(epoch.recall) }}</td>
+                    <td>{{ formatMetric(epoch.map50) }}</td>
+                    <td>{{ formatMetric(epoch.map50_95) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+      </section>
     </div>
   </main>
 </template>

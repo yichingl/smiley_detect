@@ -11,6 +11,7 @@ import cv2
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, Depends
+from pydantic import BaseModel
 from app.database import get_db, init_db
 from app.models import InferenceImage, InferenceTask
 import app.repositories as repo
@@ -46,6 +47,11 @@ SAVED_MODELS_DIR = BASE_DIR / "saved_models"
 VALIDATION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 TRAINING_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 VALIDATION_CACHE_LOCK = threading.Lock()
+
+
+class ProcessImageRequest(BaseModel):
+    model_name: str
+
 
 # 4. Ensure the directory physically exists
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -106,9 +112,14 @@ async def upload_images(
 
 # Start an inference task on a specific image
 @app.post("/process-image/{image_guid}")
-def trigger_image_processing(image_guid: str, db: Session = Depends(get_db)):
-
-    model_name = tasks.get_active_model_name()
+def trigger_image_processing(
+    image_guid: str,
+    request: ProcessImageRequest,
+    db: Session = Depends(get_db)
+):
+    model_name = request.model_name
+    if tasks.get_model_path(model_name) is None:
+        raise HTTPException(status_code=404, detail=f"Model run '{model_name}' not found or has no best checkpoint")
 
     # insert the task record into the dabase
     db_task_record = repo.create_inference_task(db, image_guid, model_name=model_name)
@@ -116,7 +127,7 @@ def trigger_image_processing(image_guid: str, db: Session = Depends(get_db)):
     # TODO - if failed to insert, throw
 
     # call background task to process image
-    task = tasks.process_sample_image.delay(db_task_record.task_identifier, db_task_record.id)
+    tasks.process_sample_image.delay(db_task_record.task_identifier, db_task_record.id, model_name)
 
     # update status to PENDING
     db_task_update = repo.update_inference_task(db, db_task_record.id, "PENDING", model_name=model_name)
@@ -269,10 +280,14 @@ def get_model_runs():
         "map50_95": "metrics/mAP50-95(B)"
     }
     runs = []
-    for run_dir in sorted(
-        (path for path in SAVED_MODELS_DIR.iterdir() if path.is_dir()),
-        key=lambda path: path.name.casefold()
-    ):
+    run_dirs = [path for path in SAVED_MODELS_DIR.iterdir() if path.is_dir()]
+    run_dirs.sort(
+        key=lambda path: (
+            -((path / "weights" / "best.pt").stat().st_mtime if (path / "weights" / "best.pt").is_file() else 0),
+            path.name.casefold()
+        )
+    )
+    for run_dir in run_dirs:
         note_path = run_dir / "note.txt"
         try:
             note = note_path.read_text(encoding="utf-8").strip() if note_path.is_file() else None
@@ -308,9 +323,16 @@ def get_model_runs():
             except OSError as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to read results for model run: {run_dir.name}") from exc
 
+        best_epoch = max(
+            epochs,
+            key=lambda epoch: 0.1 * epoch["map50"] + 0.9 * epoch["map50_95"],
+            default=None
+        )
         runs.append({
             "name": run_dir.name,
             "note": note or None,
+            "available": (run_dir / "weights" / "best.pt").is_file(),
+            "best_epoch": best_epoch["epoch"] if best_epoch else None,
             "epochs": epochs
         })
 

@@ -36,6 +36,16 @@ def get_active_model_path() -> str:
     return "yolov8n.pt"
 
 
+def get_model_path(model_name: str) -> Path | None:
+    """Resolve a saved model run to its best checkpoint without accepting paths."""
+    if not model_name or Path(model_name).name != model_name or model_name in {".", ".."}:
+        return None
+
+    project_root = Path(__file__).resolve().parent.parent
+    model_path = project_root / "saved_models" / model_name / "weights" / "best.pt"
+    return model_path if model_path.is_file() else None
+
+
 MODEL_NAME = get_active_model_name()
 MODEL_PATH = get_active_model_path()
 
@@ -73,12 +83,15 @@ def run_localization_inference(image_path: str, model_path: str | None = None) -
 
 
 @celery_app.task(name="tasks.process_sample_image")
-def process_sample_image(task_identifier: str, task_id: int):
+def process_sample_image(task_identifier: str, task_id: int, model_name: str):
     """Simulate a long-running image classification or processing task."""
 
     db = SessionLocal()
-    active_model_name = get_active_model_name()
-    active_model_path = get_active_model_path()
+    model_path = get_model_path(model_name)
+    if model_path is None:
+        repo.update_inference_task(db, task_id, "FAILURE", model_name=model_name)
+        db.close()
+        return {"error": f"Model run '{model_name}' was not found or has no best checkpoint."}
 
     time.sleep(6)
     print("Starting Processing")
@@ -86,12 +99,12 @@ def process_sample_image(task_identifier: str, task_id: int):
         db,
         task_id,
         "PROCESSING",
-        model_name=active_model_name
+        model_name=model_name
     )
 
     time.sleep(6)
     image_path = repo.get_inference_image_by_task_id(db, task_id).filepath
-    detected_locations = run_localization_inference(image_path, active_model_path)
+    detected_locations = run_localization_inference(image_path, str(model_path))
 
     print("Detections...")
     for detection in detected_locations:
@@ -118,9 +131,9 @@ def process_sample_image(task_identifier: str, task_id: int):
     time.sleep(6)
 
     try:
-        task_update = repo.update_inference_task(db, task_id, "SUCCESS", model_name=active_model_name)
+        task_update = repo.update_inference_task(db, task_id, "SUCCESS", model_name=model_name)
     except Exception:
-        task_update = repo.update_inference_task(db, task_id, "FAILURE", model_name=active_model_name)
+        task_update = repo.update_inference_task(db, task_id, "FAILURE", model_name=model_name)
 
     print(f"Completed {task_update.task_status}")
 
@@ -128,9 +141,10 @@ def process_sample_image(task_identifier: str, task_id: int):
         return {"error": f"Task ID {task_identifier} not found in database."}
 
     db.refresh(task_update)
-    return {
+    result = {
         "status": task_update.task_status,
         "task_identifier": task_update.task_identifier,
         "model_name": task_update.model_name
     }
-
+    db.close()
+    return result
