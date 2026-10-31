@@ -832,6 +832,28 @@
 <template>
   <main class="dashboard">
     <div class="dashboard__shell">
+      <div class="page-topbar" aria-label="Page navigation">
+        <button
+          v-if="isBehindScenes"
+          class="page-link page-link--back"
+          type="button"
+          @click="backToHome"
+        >
+          <span aria-hidden="true">←</span>
+          <span>Back to Home</span>
+        </button>
+        <span v-else aria-hidden="true"></span>
+        <button
+          v-if="!isBehindScenes"
+          class="page-link page-link--forward"
+          type="button"
+          @click="openBehindScenes"
+        >
+          <span>Behind the Scenes</span>
+          <span aria-hidden="true">→</span>
+        </button>
+      </div>
+
       <header class="page-header">
         <div class="brand-mark" aria-hidden="true">S</div>
         <div class="page-header__copy">
@@ -840,24 +862,6 @@
           <p class="page-header__subtitle">Upload images, run detection, and review your results.</p>
         </div>
         <div class="header-actions">
-          <button
-            v-if="!isBehindScenes"
-            class="page-arrow page-arrow--forward"
-            type="button"
-            @click="openBehindScenes"
-          >
-            <span>Behind the Scenes</span>
-            <span aria-hidden="true">→</span>
-          </button>
-          <button
-            v-else
-            class="page-arrow page-arrow--back"
-            type="button"
-            @click="backToHome"
-          >
-            <span aria-hidden="true">←</span>
-            <span>Back to Home</span>
-          </button>
           <div class="image-count" aria-live="polite">
             <span class="image-count__value">{{ images.length }}</span>
             <span>{{ images.length === 1 ? 'image' : 'images' }} in library</span>
