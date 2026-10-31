@@ -565,6 +565,40 @@
     }
   }
 
+  const saveNoDetections = async () => {
+    const taskGuid = correctionTaskGuid.value
+    if (!taskGuid) return
+    const accepted = window.confirm('Accept no detections? This image will be saved as training data with no bounding boxes.')
+    if (!accepted) return
+
+    isSavingCorrection.value = true
+    correctionError.value = ''
+    datasetSaveMessages.value[taskGuid] = ''
+    try {
+      const response = await fetch(`/tasks/${taskGuid}/add-to-dataset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ split: 'train', accept_no_detections: true })
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(result.detail || `Server returned status ${response.status}`)
+      }
+
+      for (const taskList of Object.values(imageDetails.value)) {
+        const task = taskList.find((item) => item.guid === taskGuid)
+        if (task) task.saved = result.saved
+      }
+      datasetSaveMessages.value[taskGuid] = `Saved ${result.image} to training data with no detections.`
+      trainingImagesLoaded.value = false
+      closeCorrectionModal(true)
+    } catch (err) {
+      correctionError.value = err instanceof Error ? err.message : 'Could not save no-detections training data.'
+    } finally {
+      isSavingCorrection.value = false
+    }
+  }
+
   const addTaskToDataset = async (taskGuid: string, split: 'train' | 'val') => {
     const splitLabel = split === 'train' ? 'training' : 'validation'
     const confirmed = window.confirm(
@@ -956,7 +990,6 @@
                           Add as validation data
                         </button>
                         <button
-                          v-if="task.detection_count === 0"
                           type="button"
                           :disabled="task.task_status !== 'SUCCESS' || task.saved !== 0 || !!getImageSavedSplit(img) || savingDatasetTaskId === task.guid"
                           @click="openCorrectionModal(task, img)"
@@ -1268,7 +1301,7 @@
               : undefined"
           >
             <img
-              :src="`/${correctionImage.filepath}`"
+              :src="`/tasks/${correctionTaskGuid}/rendered-image`"
               :alt="`Draw a corrected box around the smiley in ${correctionImage.name}`"
               @load="onCorrectionImageLoad"
               @error="correctionError = 'Could not load the original image.'"
@@ -1317,6 +1350,14 @@
             Redraw box
           </button>
           <button
+            class="button button--secondary"
+            type="button"
+            :disabled="isSavingCorrection"
+            @click="saveNoDetections"
+          >
+            Accept no detections
+          </button>
+          <button
             class="button button--primary"
             type="button"
             :disabled="!correctionBox || isSavingCorrection || isLoadingCorrectionPreview"
@@ -1346,7 +1387,7 @@
             <p class="eyebrow">CONFIRM TRAINING DATA</p>
             <h2 id="correction-confirm-heading">Review the corrected image</h2>
             <p class="section-description">
-              Confirm that the red box correctly surrounds the smiley before saving this image and label to training data.
+              Confirm that the blue corrective box correctly surrounds the smiley before saving this image and label to training data. Existing red prediction boxes may remain visible.
             </p>
           </div>
         </header>

@@ -81,6 +81,7 @@ class CorrectedBox(BaseModel):
 class AddTaskToDatasetRequest(BaseModel):
     split: Literal["train", "val"]
     corrected_box: CorrectedBox | None = None
+    accept_no_detections: bool = False
 
 
 def _validated_corrected_box(box: CorrectedBox, image_width: int, image_height: int) -> tuple[int, int, int, int]:
@@ -241,11 +242,10 @@ def add_task_to_dataset(
             detail=f"This image has already been saved to {saved_split} data; no other tasks can be saved"
         )
 
-    if request.corrected_box is not None:
-        if request.split != "train":
-            raise HTTPException(status_code=400, detail="Corrected boxes can only be saved as training data")
-        if task.detections:
-            raise HTTPException(status_code=409, detail="Corrections are only allowed for tasks with no detections")
+    if request.accept_no_detections and request.corrected_box is not None:
+        raise HTTPException(status_code=400, detail="Accept no detections cannot be combined with a corrected box")
+    if request.corrected_box is not None and request.split != "train":
+        raise HTTPException(status_code=400, detail="Corrected boxes can only be saved as training data")
 
     source_path = (BASE_DIR / task.image.filepath).resolve()
     upload_dir = UPLOAD_DIR.resolve()
@@ -273,11 +273,12 @@ def add_task_to_dataset(
     destination_image = image_dir / filename
     destination_label = label_dir / f"{Path(filename).stem}.txt"
     label_lines = []
-    box_coordinates = (
-        [request.corrected_box]
-        if request.corrected_box is not None
-        else task.detections
-    )
+    if request.accept_no_detections:
+        box_coordinates = []
+    elif request.corrected_box is not None:
+        box_coordinates = [request.corrected_box]
+    else:
+        box_coordinates = task.detections
     for box in box_coordinates:
         x_min = box.x_min
         y_min = box.y_min
@@ -452,9 +453,6 @@ def get_corrected_box_preview(
             status_code=409,
             detail=f"This image has already been saved to {saved_split} data; no other tasks can be saved"
         )
-    if task.detections:
-        raise HTTPException(status_code=409, detail="Corrections are only allowed for tasks with no detections")
-
     image_path = (BASE_DIR / task.image.filepath).resolve()
     if not image_path.is_relative_to(UPLOAD_DIR.resolve()) or not image_path.is_file():
         raise HTTPException(status_code=404, detail="Source image file not found in uploads")
@@ -464,7 +462,15 @@ def get_corrected_box_preview(
         raise HTTPException(status_code=500, detail="Failed to decode source image")
     image_height, image_width = image.shape[:2]
     x_min, y_min, x_max, y_max = _validated_corrected_box(box, image_width, image_height)
-    cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 0, 255), 2)
+    for det in task.detections:
+        cv2.rectangle(
+            image,
+            (int(det.x_min), int(det.y_min)),
+            (int(det.x_max), int(det.y_max)),
+            (0, 0, 255),
+            2
+        )
+    cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (255, 0, 0), 3)
 
     success, encoded_image = cv2.imencode(".jpg", image)
     if not success:
