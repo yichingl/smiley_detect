@@ -568,6 +568,12 @@ margin: 0 0 32px;
   white-space: nowrap;
 }
 
+.image-card__uploaded {
+  color: #7b879b;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
 .parent-saved-badge,
 .parent-unsaved-label {
   width: fit-content;

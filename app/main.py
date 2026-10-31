@@ -342,6 +342,7 @@ def get_images(db: Session = Depends(get_db)): # TODO paginate and filter
         db.query(InferenceImage, func.count(InferenceTask.id).label("task_count"))
         .outerjoin(InferenceTask, InferenceTask.image_id == InferenceImage.id)
         .group_by(InferenceImage.id)
+        .order_by(InferenceImage.uploaded_at.desc(), InferenceImage.id.desc())
         .all()
     )
     return [

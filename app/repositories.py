@@ -15,7 +15,7 @@ ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 UPLOAD_DIR = "uploaded_images"
 
 # insert a new inference image
-def create_bulk_inference_images(db: Session, files: List[UploadFile]) -> List[uuid4]:
+def create_bulk_inference_images(db: Session, files: List[UploadFile]) -> List[str]:
     """Validates files, saves to disk, then inserts them into the database"""
 
     # TODO - resize the image to be within max width/height
@@ -75,7 +75,7 @@ def create_bulk_inference_images(db: Session, files: List[UploadFile]) -> List[u
         db.commit()
         for record in image_records:
             db.refresh(record)
-        return image_records
+        return [record.guid for record in image_records]
     except Exception as exc:
         db.rollback()
         raise exc

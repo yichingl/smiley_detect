@@ -185,7 +185,7 @@
 
   // Upload state variables
   const fileInput = ref<HTMLInputElement | null>(null)
-  const selectedFile = ref<File | null>(null)
+  const selectedFiles = ref<File[]>([])
   const isUploading = ref(false)
   const uploadMessage = ref('')
 
@@ -194,7 +194,12 @@
     try {
       const response = await fetch('/images')
       if (response.ok) {
-        images.value = await response.json()
+        const uploadedImages = await response.json()
+        images.value = uploadedImages.sort((a: InferenceImage, b: InferenceImage) => {
+          const aTime = a.uploaded_at ? new Date(a.uploaded_at).getTime() : 0
+          const bTime = b.uploaded_at ? new Date(b.uploaded_at).getTime() : 0
+          return bTime - aTime
+        })
       }
     } catch (err) {
       console.error('Failed to fetch images:', err)
@@ -249,10 +254,10 @@
     return null
   }
 
-  const formatCreatedAt = (createdAt?: string) => {
-    if (!createdAt) return 'Created date unavailable'
-    const date = new Date(createdAt)
-    if (Number.isNaN(date.getTime())) return 'Created date unavailable'
+  const formatDateTime = (dateTime?: string, unavailableLabel = 'Date unavailable') => {
+    if (!dateTime) return unavailableLabel
+    const date = new Date(dateTime)
+    if (Number.isNaN(date.getTime())) return unavailableLabel
     return new Intl.DateTimeFormat(undefined, {
       year: 'numeric',
       month: 'short',
@@ -261,6 +266,8 @@
       minute: '2-digit'
     }).format(date)
   }
+
+  const formatCreatedAt = (createdAt?: string) => formatDateTime(createdAt, 'Created date unavailable')
 
   const getBestEpoch = (run: ModelRun) =>
     run.epochs.find((epoch) => epoch.epoch === run.best_epoch)
@@ -341,26 +348,26 @@
   // Handle file selection
   const handleFileChange = (event: Event) => {
     const target = event.target as HTMLInputElement
-    if (target.files && target.files[0]) {
-      selectedFile.value = target.files[0]
-    }
+    selectedFiles.value = target.files ? Array.from(target.files) : []
   }
 
-  // Upload single image via /upload-single-image/
+  // Upload one or more images via /upload-images/
   const uploadImage = async () => {
-    if (!selectedFile.value) {
-      uploadMessage.value = 'Please select a file first!'
+    if (selectedFiles.value.length === 0) {
+      uploadMessage.value = 'Please select at least one file first!'
       return
     }
 
     const formData = new FormData()
-    formData.append('file', selectedFile.value)
+    for (const file of selectedFiles.value) {
+      formData.append('imgs', file)
+    }
 
     isUploading.value = true
     uploadMessage.value = ''
 
     try {
-      const response = await fetch('/upload-single-image/', {
+      const response = await fetch('/upload-images/', {
         method: 'POST',
         body: formData,
       })
@@ -369,8 +376,9 @@
         throw new Error('Upload failed')
       }
 
-      uploadMessage.value = 'Image uploaded successfully!'
-      selectedFile.value = null
+      const uploadedCount = selectedFiles.value.length
+      uploadMessage.value = `${uploadedCount} ${uploadedCount === 1 ? 'image' : 'images'} uploaded successfully!`
+      selectedFiles.value = []
       if (fileInput.value) fileInput.value.value = ''
 
       // Refresh images list automatically after upload
@@ -782,34 +790,35 @@
           <div>
             <p class="eyebrow">GET STARTED</p>
             <h2 id="upload-heading">Add an image</h2>
-            <p class="section-description">Choose a JPG or PNG image to run smiley detection.</p>
+            <p class="section-description">Choose one or more JPG or PNG images to run smiley detection.</p>
           </div>
           <span class="upload-icon" aria-hidden="true">↑</span>
         </div>
 
         <div class="upload-controls">
-          <label class="file-picker" :class="{ 'file-picker--selected': selectedFile }">
+          <label class="file-picker" :class="{ 'file-picker--selected': selectedFiles.length > 0 }">
             <input
               ref="fileInput"
               type="file"
               accept="image/jpeg, image/jpg, image/png"
+              multiple
               @change="handleFileChange"
             />
             <span class="file-picker__icon" aria-hidden="true">＋</span>
             <span class="file-picker__text">
-              <strong>{{ selectedFile ? selectedFile.name : 'Choose an image' }}</strong>
-              <small>{{ selectedFile ? 'Ready to upload' : 'JPG or PNG, select a file from your device' }}</small>
+              <strong>{{ selectedFiles.length === 1 ? selectedFiles[0].name : selectedFiles.length > 1 ? `${selectedFiles.length} images selected` : 'Choose images' }}</strong>
+              <small>{{ selectedFiles.length > 0 ? 'Ready to upload' : 'JPG or PNG, select one or more files from your device' }}</small>
             </span>
             <span class="file-picker__action">Browse</span>
           </label>
           <button
             class="button button--primary upload-button"
             type="button"
-            :disabled="isUploading || !selectedFile"
+            :disabled="isUploading || selectedFiles.length === 0"
             @click="uploadImage"
           >
             <span v-if="isUploading" class="button-spinner" aria-hidden="true"></span>
-            {{ isUploading ? 'Uploading' : 'Upload image' }}
+            {{ isUploading ? 'Uploading' : selectedFiles.length > 1 ? 'Upload images' : 'Upload image' }}
           </button>
         </div>
 
@@ -860,6 +869,9 @@
                 <span class="image-card__details">
                   <strong class="image-card__name">{{ img.name }}</strong>
                   <span class="image-card__path">{{ img.filepath }}</span>
+                  <time v-if="img.uploaded_at" :datetime="img.uploaded_at" class="image-card__uploaded">
+                    Uploaded {{ formatDateTime(img.uploaded_at) }}
+                  </time>
                   <span
                     v-if="getImageSavedSplit(img)"
                     class="parent-saved-badge"
