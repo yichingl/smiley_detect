@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed, onMounted, ref } from 'vue'
+  import { computed, onMounted, onUnmounted, ref } from 'vue'
 
   // interfaces
   interface InferenceImage {
@@ -192,7 +192,7 @@
   const isUploading = ref(false)
   const uploadMessage = ref('')
 
-  // Fetch existing uploaded images on mount / refresh
+  // Fetch existing uploaded images on mount or after automatic actions
   const fetchImages = async () => {
     try {
       const response = await fetch('/images')
@@ -394,7 +394,7 @@
     }
   }
 
-  // Fetch tasks for a specific image GUID (used for initial expansion and manual refresh)
+  // Fetch tasks for a specific image GUID (used for initial expansion and task polling)
   const fetchTasksForImage = async (imgGuid: string) => {
     try {
       const response = await fetch(`/images/${imgGuid}/tasks`)
@@ -417,6 +417,27 @@
       console.error('Failed to fetch tasks for image', err)
       imageDetails.value[imgGuid] = []
     }
+  }
+
+  const activeTaskStatuses = new Set(['PENDING', 'STARTED', 'RECEIVED', 'RETRY', 'RUNNING'])
+  const taskPollingInFlight = new Set<string>()
+  let taskPollingInterval: ReturnType<typeof setInterval> | null = null
+
+  // TODO: Replace short polling with FastAPI WebSockets plus Redis/Celery task events when real-time scale requires it.
+  const pollActiveTasks = async () => {
+    const guidsToPoll = Object.entries(imageDetails.value)
+      .filter(([, tasks]) => tasks.some((task) => activeTaskStatuses.has(task.task_status.toUpperCase())))
+      .map(([guid]) => guid)
+
+    await Promise.all(guidsToPoll.map(async (guid) => {
+      if (taskPollingInFlight.has(guid)) return
+      taskPollingInFlight.add(guid)
+      try {
+        await fetchTasksForImage(guid)
+      } finally {
+        taskPollingInFlight.delete(guid)
+      }
+    }))
   }
 
   const openCorrectionModal = (task: TaskInfo, image: InferenceImage) => {
@@ -749,6 +770,14 @@
   onMounted(() => {
     fetchImages()
     fetchModels()
+    taskPollingInterval = setInterval(pollActiveTasks, 2000)
+  })
+
+  onUnmounted(() => {
+    if (taskPollingInterval !== null) {
+      clearInterval(taskPollingInterval)
+      taskPollingInterval = null
+    }
   })
 </script>
 
@@ -901,10 +930,6 @@
               <span v-if="isStartingBulkTasks" class="button-spinner" aria-hidden="true"></span>
               {{ isStartingBulkTasks ? 'Starting tasks…' : `Start tasks (${selectedBulkImageIds.length})` }}
             </button>
-            <button class="button button--secondary" type="button" @click="fetchImages">
-              <span aria-hidden="true">↻</span>
-              Refresh
-            </button>
           </div>
         </div>
 
@@ -1019,10 +1044,6 @@
                     <h3>Detection tasks</h3>
                     <p class="section-description">Choose a task to view its result.</p>
                   </div>
-                  <button class="button button--text" type="button" @click="fetchTasksForImage(img.guid)">
-                    <span aria-hidden="true">↻</span>
-                    Refresh tasks
-                  </button>
                 </div>
 
                 <div v-if="!imageDetails[img.guid] || imageDetails[img.guid].length === 0" class="task-empty">
@@ -1118,15 +1139,6 @@
               These boxes are drawn from the dataset’s ground-truth label files. They are not model predictions.
             </p>
           </div>
-          <button
-            class="button button--secondary"
-            type="button"
-            :disabled="isLoadingDatasetImages"
-            @click="fetchDatasetImages(activeDatasetSplit, true)"
-          >
-            <span aria-hidden="true">↻</span>
-            Refresh
-          </button>
         </div>
 
         <div v-if="isLoadingDatasetImages" class="validation-loading" role="status" aria-live="polite">
@@ -1180,15 +1192,6 @@
             <h2 id="models-heading">Model runs</h2>
             <p class="section-description">Training and validation metrics for each saved run.</p>
           </div>
-          <button
-            class="button button--secondary"
-            type="button"
-            :disabled="isLoadingModels"
-            @click="fetchModels"
-          >
-            <span aria-hidden="true">↻</span>
-            Refresh
-          </button>
         </div>
 
         <div v-if="isLoadingModels" class="validation-loading" role="status" aria-live="polite">
