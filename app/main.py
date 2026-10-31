@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import csv
+import datetime
 import hashlib
 import json
 import logging
@@ -479,12 +480,16 @@ def get_model_runs():
     }
     runs = []
     run_dirs = [path for path in SAVED_MODELS_DIR.iterdir() if path.is_dir()]
-    run_dirs.sort(
-        key=lambda path: (
-            -((path / "weights" / "best.pt").stat().st_mtime if (path / "weights" / "best.pt").is_file() else 0),
-            path.name.casefold()
-        )
-    )
+
+    def model_created_timestamp(run_dir: Path) -> float:
+        try:
+            parsed = datetime.datetime.strptime(run_dir.name.rsplit("_", 2)[-2] + "_" + run_dir.name.rsplit("_", 2)[-1], "%Y%m%d_%H%M%S")
+            return parsed.replace(tzinfo=datetime.timezone.utc).timestamp()
+        except (ValueError, IndexError):
+            candidates = [item for item in run_dir.rglob("*") if item.is_file()]
+            return max((item.stat().st_mtime for item in candidates), default=run_dir.stat().st_mtime)
+
+    run_dirs.sort(key=model_created_timestamp, reverse=True)
     for run_dir in run_dirs:
         note_path = run_dir / "note.txt"
         try:
@@ -526,11 +531,15 @@ def get_model_runs():
             key=lambda epoch: 0.1 * epoch["map50"] + 0.9 * epoch["map50_95"],
             default=None
         )
+        epochs.sort(key=lambda epoch: epoch["epoch"], reverse=True)
+        created_timestamp = model_created_timestamp(run_dir)
+        created_at = datetime.datetime.fromtimestamp(created_timestamp, datetime.timezone.utc).isoformat()
         runs.append({
             "name": run_dir.name,
             "note": note or None,
             "available": (run_dir / "weights" / "best.pt").is_file(),
             "best_epoch": best_epoch["epoch"] if best_epoch else None,
+            "created_at": created_at,
             "epochs": epochs
         })
 
@@ -553,7 +562,8 @@ def _get_dataset_images(
             path for path in image_dir.iterdir()
             if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png"}
         ),
-        key=lambda path: path.name.casefold()
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True
     )
     if not image_paths:
         return {"source": "ground_truth_labels", "images": []}
@@ -592,6 +602,18 @@ def _get_dataset_images(
                 manifest.get("signature") == signature
                 and all((cache_dir / image["filename"]).is_file() for image in cached_images)
             ):
+                image_times = {path.name: path.stat().st_mtime_ns for path in image_paths}
+                for image in cached_images:
+                    source_path = image_dir / image["name"]
+                    if source_path.is_file():
+                        created_timestamp = source_path.stat().st_mtime
+                        image["created_at"] = datetime.datetime.fromtimestamp(
+                            created_timestamp, datetime.timezone.utc
+                        ).isoformat()
+                cached_images.sort(
+                    key=lambda image: image_times.get(image["name"], 0),
+                    reverse=True
+                )
                 return {
                     "source": "ground_truth_labels",
                     "images": cached_images
@@ -666,7 +688,10 @@ def _get_dataset_images(
                 "name": image_path.name,
                 "filename": filename,
                 "image_url": f"{cache_url_prefix}/{quote(filename)}?v={cache_version}",
-                "detection_count": detection_count
+                "detection_count": detection_count,
+                "created_at": datetime.datetime.fromtimestamp(
+                    image_path.stat().st_mtime, datetime.timezone.utc
+                ).isoformat()
             })
 
         current_filenames = {image["filename"] for image in rendered_images}

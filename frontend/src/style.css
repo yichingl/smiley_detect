@@ -55,10 +55,11 @@ input:focus-visible {
 }
 
 .page-header {
-  display: flex;
-  align-items: center;
-  gap: 17px;
-  margin: 0 0 32px;
+position: relative;
+display: flex;
+align-items: center;
+gap: 17px;
+margin: 0 0 32px;
 }
 
 .brand-mark,
@@ -136,6 +137,46 @@ input:focus-visible {
   font-size: 23px;
   font-weight: 700;
   line-height: 1.1;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.page-arrow {
+  min-height: 38px;
+  padding: 9px 12px;
+  border: 1px solid #dbe5f7;
+  border-radius: 9px;
+  color: #315fca;
+  background: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
+}
+
+.page-arrow:hover {
+  border-color: #b7c9ef;
+  background: #fff;
+  transform: translateY(-1px);
+}
+
+.page-arrow--forward {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-arrow--back {
+  position: absolute;
+  left: 0;
+  top: -43px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .tab-nav {
@@ -991,6 +1032,18 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+.validation-card__identity {
+  min-width: 0;
+}
+
+.created-on {
+  display: block;
+  margin-top: 4px;
+  color: #7b879b;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
 .models-section {
   margin-top: 4px;
 }
@@ -1015,6 +1068,10 @@ input:focus-visible {
   gap: 14px;
   padding: 14px 16px;
   border-bottom: 1px solid #edf0f5;
+}
+
+.model-run__title-group {
+  min-width: 0;
 }
 
 .model-run__title {

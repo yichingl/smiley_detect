@@ -39,6 +39,7 @@
     name: string
     image_url: string
     detection_count: number
+    created_at?: string
   }
 
   interface ModelEpoch {
@@ -56,6 +57,7 @@
     note: string | null
     available: boolean
     best_epoch: number | null
+    created_at?: string
     epochs: ModelEpoch[]
   }
 
@@ -96,6 +98,7 @@
 
   // variables
   const activeTab = ref<'home' | 'validation' | 'training' | 'models'>('home')
+  const isBehindScenes = ref(false)
   const images = ref<InferenceImage[]>([])
   const modelRuns = ref<ModelRun[]>(readCachedModelRuns())
   const selectedModel = ref(
@@ -207,7 +210,13 @@
       }
 
       const data = await response.json()
-      modelRuns.value = data.runs || []
+      modelRuns.value = (data.runs || [])
+        .map((run: ModelRun) => ({ ...run, epochs: [...run.epochs].sort((a, b) => b.epoch - a.epoch) }))
+        .sort((a: ModelRun, b: ModelRun) => {
+          const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
+          const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
+          return bTime - aTime
+        })
       writeBrowserCache('smiley-model-runs', JSON.stringify(modelRuns.value))
       const selectedModelExists = modelRuns.value.some(
         (run) => run.name === selectedModel.value && run.available
@@ -230,6 +239,19 @@
 
   const formatMetric = (value: number) => value.toFixed(4)
 
+  const formatCreatedAt = (createdAt?: string) => {
+    if (!createdAt) return 'Created date unavailable'
+    const date = new Date(createdAt)
+    if (Number.isNaN(date.getTime())) return 'Created date unavailable'
+    return new Intl.DateTimeFormat(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    }).format(date)
+  }
+
   const getBestEpoch = (run: ModelRun) =>
     run.epochs.find((epoch) => epoch.epoch === run.best_epoch)
 
@@ -237,6 +259,9 @@
     const epoch = getBestEpoch(run)
     return epoch ? [epoch] : []
   }
+
+  const getSortedEpochRows = (run: ModelRun) =>
+    [...run.epochs].sort((a, b) => b.epoch - a.epoch)
 
   const chooseModel = (modelName: string) => {
     selectedModel.value = modelName
@@ -266,7 +291,11 @@
       }
 
       const data = await response.json()
-      datasetImages.value = data.images || []
+      datasetImages.value = (data.images || []).sort((a: DatasetImage, b: DatasetImage) => {
+        const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
+        const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
+        return bTime - aTime
+      })
       loaded.value = true
     } catch (err) {
       error.value = `Could not load ${split} images. Please try again.`
@@ -286,6 +315,17 @@
     ) {
       await fetchDatasetImages(tab)
     }
+  }
+
+  const openBehindScenes = async () => {
+    isBehindScenes.value = true
+    await selectTab('validation')
+  }
+
+  const backToHome = () => {
+    isBehindScenes.value = false
+    activeTab.value = 'home'
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   // Handle file selection
@@ -619,22 +659,33 @@
           <h1>Smiley Detection</h1>
           <p class="page-header__subtitle">Upload images, run detection, and review your results.</p>
         </div>
-        <div class="image-count" aria-live="polite">
-          <span class="image-count__value">{{ images.length }}</span>
-          <span>{{ images.length === 1 ? 'image' : 'images' }} in library</span>
+        <div class="header-actions">
+          <button
+            v-if="!isBehindScenes"
+            class="page-arrow page-arrow--forward"
+            type="button"
+            @click="openBehindScenes"
+          >
+            <span>Behind the Scenes</span>
+            <span aria-hidden="true">→</span>
+          </button>
+          <button
+            v-else
+            class="page-arrow page-arrow--back"
+            type="button"
+            @click="backToHome"
+          >
+            <span aria-hidden="true">←</span>
+            <span>Back to Home</span>
+          </button>
+          <div class="image-count" aria-live="polite">
+            <span class="image-count__value">{{ images.length }}</span>
+            <span>{{ images.length === 1 ? 'image' : 'images' }} in library</span>
+          </div>
         </div>
       </header>
 
-      <nav class="tab-nav" aria-label="Main navigation">
-        <button
-          class="tab-nav__button"
-          :class="{ 'tab-nav__button--active': activeTab === 'home' }"
-          type="button"
-          :aria-current="activeTab === 'home' ? 'page' : undefined"
-          @click="selectTab('home')"
-        >
-          Home
-        </button>
+      <nav v-if="isBehindScenes" class="tab-nav" aria-label="Behind the scenes navigation">
         <button
           class="tab-nav__button"
           :class="{ 'tab-nav__button--active': activeTab === 'validation' }"
@@ -664,7 +715,7 @@
         </button>
       </nav>
 
-      <section class="selected-model" aria-label="Selected detection model">
+      <section v-if="!isBehindScenes" class="selected-model" aria-label="Selected detection model">
         <div>
           <p class="eyebrow">SELECTED MODEL</p>
           <strong>{{ selectedModel || 'No model selected' }}</strong>
@@ -958,7 +1009,12 @@
               />
             </div>
             <div class="validation-card__details">
-              <h3>{{ img.name }}</h3>
+              <div class="validation-card__identity">
+                <h3>{{ img.name }}</h3>
+                <time v-if="img.created_at" :datetime="img.created_at" class="created-on">
+                  Created {{ formatCreatedAt(img.created_at) }}
+                </time>
+              </div>
               <span class="detection-count">
                 <strong>{{ img.detection_count }}</strong>
                 {{ img.detection_count === 1 ? 'detection' : 'detections' }}
@@ -1007,11 +1063,16 @@
         <div v-else class="model-run-list">
           <article v-for="run in modelRuns" :key="run.name" class="model-run">
             <header class="model-run__header">
-              <div class="model-run__title">
-                <h3 :title="run.note || undefined">{{ run.name }}</h3>
-                <span v-if="run.best_epoch !== null" class="model-run__best">
-                  Best - Epoch {{ run.best_epoch }}
-                </span>
+              <div class="model-run__title-group">
+                <div class="model-run__title">
+                  <h3 :title="run.note || undefined">{{ run.name }}</h3>
+                  <span v-if="run.best_epoch !== null" class="model-run__best">
+                    Best - Epoch {{ run.best_epoch }}
+                  </span>
+                </div>
+                <time v-if="run.created_at" :datetime="run.created_at" class="created-on">
+                  Created {{ formatCreatedAt(run.created_at) }}
+                </time>
               </div>
               <span class="model-run__epoch-count">{{ run.epochs.length }} epochs</span>
             </header>
@@ -1033,7 +1094,7 @@
                 </thead>
                 <tbody>
                   <tr
-                    v-for="epoch in run.epochs"
+                    v-for="epoch in getSortedEpochRows(run)"
                     :key="epoch.epoch"
                     :class="{ 'model-run__best-row': epoch.epoch === run.best_epoch }"
                   >
