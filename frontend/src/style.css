@@ -213,27 +213,6 @@ margin: 0 0 32px;
   box-shadow: 0 1px 4px rgba(29, 48, 82, 0.12);
 }
 
-.selected-model {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin: -10px 0 22px;
-  padding: 10px 14px;
-  border: 1px solid #e5eaf2;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.8);
-}
-
-.selected-model .eyebrow {
-  margin-bottom: 3px;
-}
-
-.selected-model strong {
-  color: #344258;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
 
 .panel,
 .image-card,
@@ -466,6 +445,45 @@ margin: 0 0 32px;
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.selected-model-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-right: auto;
+  padding: 2px 0;
+  border: 0;
+  color: #7a8495;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.selected-model-link__name {
+  overflow: hidden;
+  max-width: 180px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-model-link__pencil {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.selected-model-link:hover {
+  color: #596579;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.selected-model-link:focus-visible {
+  outline: 2px solid #a9b5c7;
+  outline-offset: 4px;
+  border-radius: 2px;
 }
 
 .library-heading .eyebrow {
@@ -1474,11 +1492,6 @@ margin: 0 0 32px;
   }
 
   .tab-nav {
-    margin-bottom: 18px;
-  }
-
-  .selected-model {
-    margin-top: -7px;
     margin-bottom: 18px;
   }
 

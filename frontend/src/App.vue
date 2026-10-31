@@ -158,6 +158,7 @@
   const savingDatasetTaskId = ref('')
   const datasetSaveMessages = ref<Record<string, string>>({})
   const selectedBulkImageIds = ref<string[]>([])
+  const bulkSelectionAnchorId = ref<string | null>(null)
   const isStartingBulkTasks = ref(false)
   const bulkTaskMessage = ref('')
   const correctionTaskGuid = ref('')
@@ -459,23 +460,22 @@
             ? (savedTask.saved === 1 ? 'training' : 'validation')
             : null
         }
-      } else {
+      } else if (response.status === 404) {
         imageDetails.value[imgGuid] = []
       }
     } catch (err) {
       console.error('Failed to fetch tasks for image', err)
-      imageDetails.value[imgGuid] = []
     }
   }
 
-  const activeTaskStatuses = new Set(['PENDING', 'STARTED', 'RECEIVED', 'RETRY', 'RUNNING'])
+  const terminalTaskStatuses = new Set(['SUCCESS', 'FAILURE', 'REVOKED'])
   const taskPollingInFlight = new Set<string>()
   let taskPollingInterval: ReturnType<typeof setInterval> | null = null
 
   // TODO: Replace short polling with FastAPI WebSockets plus Redis/Celery task events when real-time scale requires it.
   const pollActiveTasks = async () => {
     const guidsToPoll = Object.entries(imageDetails.value)
-      .filter(([, tasks]) => tasks.some((task) => activeTaskStatuses.has(task.task_status.toUpperCase())))
+      .filter(([, tasks]) => tasks.some((task) => !terminalTaskStatuses.has(task.task_status.toUpperCase())))
       .map(([guid]) => guid)
 
     await Promise.all(guidsToPoll.map(async (guid) => {
@@ -734,10 +734,33 @@
     }
   }
 
-  const toggleBulkImageSelection = (imageGuid: string) => {
-    selectedBulkImageIds.value = selectedBulkImageIds.value.includes(imageGuid)
-      ? selectedBulkImageIds.value.filter((guid) => guid !== imageGuid)
-      : [...selectedBulkImageIds.value, imageGuid]
+  const toggleBulkImageSelection = (imageGuid: string, event?: Event) => {
+    const checkboxEvent = event as MouseEvent | undefined
+    const checkbox = event?.target instanceof HTMLInputElement ? event.target : null
+    const isChecked = checkbox?.checked ?? !selectedBulkImageIds.value.includes(imageGuid)
+
+    if (checkboxEvent?.shiftKey && bulkSelectionAnchorId.value) {
+      const anchorIndex = images.value.findIndex((img) => img.guid === bulkSelectionAnchorId.value)
+      const targetIndex = images.value.findIndex((img) => img.guid === imageGuid)
+      if (anchorIndex >= 0 && targetIndex >= 0) {
+        const start = Math.min(anchorIndex, targetIndex)
+        const end = Math.max(anchorIndex, targetIndex)
+        const rangeIds = images.value.slice(start, end + 1).map((img) => img.guid)
+        if (isChecked) {
+          selectedBulkImageIds.value = [...new Set([...selectedBulkImageIds.value, ...rangeIds])]
+        } else {
+          selectedBulkImageIds.value = selectedBulkImageIds.value.filter((guid) => !rangeIds.includes(guid))
+        }
+        return
+      }
+    }
+
+    if (isChecked) {
+      selectedBulkImageIds.value = [...new Set([...selectedBulkImageIds.value, imageGuid])]
+    } else {
+      selectedBulkImageIds.value = selectedBulkImageIds.value.filter((guid) => guid !== imageGuid)
+    }
+    bulkSelectionAnchorId.value = imageGuid
   }
 
   const startBulkTasks = async (imageGuids: string[]) => {
@@ -767,6 +790,7 @@
         ? `Started ${result.created_count} tasks; ${result.failed_count} failed.`
         : `Started tasks for ${result.created_count} ${result.created_count === 1 ? 'image' : 'images'}.`
       selectedBulkImageIds.value = []
+      bulkSelectionAnchorId.value = null
       await Promise.all(imageGuids.map((guid) => fetchTasksForImage(guid)))
     } catch (err) {
       bulkTaskMessage.value = err instanceof Error ? err.message : 'Could not start bulk tasks.'
@@ -899,16 +923,6 @@
         </button>
       </nav>
 
-      <section v-if="!isBehindScenes" class="selected-model" aria-label="Selected detection model">
-        <div>
-          <p class="eyebrow">SELECTED MODEL</p>
-          <strong>{{ selectedModel || 'No model selected' }}</strong>
-        </div>
-        <button class="button button--secondary" type="button" @click="openModelPicker">
-          Edit
-        </button>
-      </section>
-
       <div v-if="activeTab === 'home'">
       <section class="panel upload-panel" aria-labelledby="upload-heading">
         <div class="section-heading">
@@ -966,12 +980,14 @@
           </div>
           <div class="library-heading__actions">
             <button
-              class="button button--secondary"
+              v-if="!isBehindScenes"
+              class="selected-model-link"
               type="button"
-              :disabled="isStartingBulkTasks || images.length === 0"
-              @click="startBulkTasks(images.map((img) => img.guid))"
+              :title="`Change selected model. Current model: ${selectedModel || 'No model selected'}`"
+              @click="openModelPicker"
             >
-              Start tasks for all
+              <span class="selected-model-link__name">{{ selectedModel || 'No model selected' }}</span>
+              <span class="selected-model-link__pencil" aria-hidden="true">✎</span>
             </button>
             <button
               class="button button--primary"
@@ -1012,7 +1028,7 @@
                 <input
                   type="checkbox"
                   :checked="selectedBulkImageIds.includes(img.guid)"
-                  @change="toggleBulkImageSelection(img.guid)"
+                  @click="toggleBulkImageSelection(img.guid, $event)"
                 />
               </label>
               <button
