@@ -229,6 +229,18 @@ def add_task_to_dataset(
         raise HTTPException(status_code=409, detail="Only successfully completed tasks can be added to a dataset")
     if task.saved != SavedStatus.UNSAVED.value:
         raise HTTPException(status_code=409, detail="Task has already been saved to a dataset")
+
+    saved_sibling = next(
+        (sibling.saved for sibling in task.image.tasks if sibling.guid != task.guid and sibling.saved != SavedStatus.UNSAVED.value),
+        SavedStatus.UNSAVED.value
+    )
+    if saved_sibling != SavedStatus.UNSAVED.value:
+        saved_split = "training" if saved_sibling == SavedStatus.TRAINING.value else "validation"
+        raise HTTPException(
+            status_code=409,
+            detail=f"This image has already been saved to {saved_split} data; no other tasks can be saved"
+        )
+
     if request.corrected_box is not None:
         if request.split != "train":
             raise HTTPException(status_code=400, detail="Corrected boxes can only be saved as training data")
@@ -338,7 +350,16 @@ def get_images(db: Session = Depends(get_db)): # TODO paginate and filter
             "filepath": image.filepath,
             "upload_group_id": image.upload_group_id,
             "uploaded_at": image.uploaded_at,
-            "task_count": task_count
+            "task_count": task_count,
+            "saved_status": next(
+                (task.saved for task in image.tasks if task.saved != SavedStatus.UNSAVED.value),
+                SavedStatus.UNSAVED.value
+            ),
+            "saved_split": next(
+                ("training" if task.saved == SavedStatus.TRAINING.value else "validation"
+                 for task in image.tasks if task.saved != SavedStatus.UNSAVED.value),
+                None
+            )
         }
         for image, task_count in image_counts
     ]
@@ -421,6 +442,16 @@ def get_corrected_box_preview(
         raise HTTPException(status_code=409, detail="Only successfully completed tasks can be previewed")
     if task.saved != SavedStatus.UNSAVED.value:
         raise HTTPException(status_code=409, detail="Task has already been saved to a dataset")
+    saved_sibling = next(
+        (sibling.saved for sibling in task.image.tasks if sibling.guid != task.guid and sibling.saved != SavedStatus.UNSAVED.value),
+        SavedStatus.UNSAVED.value
+    )
+    if saved_sibling != SavedStatus.UNSAVED.value:
+        saved_split = "training" if saved_sibling == SavedStatus.TRAINING.value else "validation"
+        raise HTTPException(
+            status_code=409,
+            detail=f"This image has already been saved to {saved_split} data; no other tasks can be saved"
+        )
     if task.detections:
         raise HTTPException(status_code=409, detail="Corrections are only allowed for tasks with no detections")
 

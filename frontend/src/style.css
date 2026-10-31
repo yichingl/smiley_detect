@@ -568,6 +568,33 @@ margin: 0 0 32px;
   white-space: nowrap;
 }
 
+.parent-saved-badge,
+.parent-unsaved-label {
+  width: fit-content;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.parent-saved-badge {
+  padding: 3px 7px;
+  border-radius: 99px;
+}
+
+.parent-saved-badge--training {
+  color: #187451;
+  background: #e4f5ed;
+}
+
+.parent-saved-badge--validation {
+  color: #315b9a;
+  background: #e8efff;
+}
+
+.parent-unsaved-label {
+  color: #8a96a8;
+}
+
 .image-card__chevron {
   margin-left: auto;
   color: #8390a4;

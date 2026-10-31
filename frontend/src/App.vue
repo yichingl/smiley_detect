@@ -9,6 +9,8 @@
     upload_group_id: string
     uploaded_at?: string
     task_count: number
+    saved_status?: 0 | 1 | 2
+    saved_split?: 'training' | 'validation' | null
   }
 
   interface TaskInfo {
@@ -239,6 +241,14 @@
 
   const formatMetric = (value: number) => value.toFixed(4)
 
+  const getImageSavedSplit = (img: InferenceImage) => {
+    if (img.saved_status === 1 || img.saved_split === 'training') return 'training'
+    if (img.saved_status === 2 || img.saved_split === 'validation') return 'validation'
+    const savedTask = imageDetails.value[img.guid]?.find((task) => task.saved !== 0)
+    if (savedTask) return savedTask.saved === 1 ? 'training' : 'validation'
+    return null
+  }
+
   const formatCreatedAt = (createdAt?: string) => {
     if (!createdAt) return 'Created date unavailable'
     const date = new Date(createdAt)
@@ -381,7 +391,14 @@
         const data = await response.json()
         imageDetails.value[imgGuid] = data.tasks || []
         const image = images.value.find((item) => item.guid === imgGuid)
-        if (image) image.task_count = imageDetails.value[imgGuid].length
+        if (image) {
+          image.task_count = imageDetails.value[imgGuid].length
+          const savedTask = imageDetails.value[imgGuid].find((task) => task.saved !== 0)
+          image.saved_status = savedTask?.saved || 0
+          image.saved_split = savedTask
+            ? (savedTask.saved === 1 ? 'training' : 'validation')
+            : null
+        }
       } else {
         imageDetails.value[imgGuid] = []
       }
@@ -809,6 +826,14 @@
                 <span class="image-card__details">
                   <strong class="image-card__name">{{ img.name }}</strong>
                   <span class="image-card__path">{{ img.filepath }}</span>
+                  <span
+                    v-if="getImageSavedSplit(img)"
+                    class="parent-saved-badge"
+                    :class="`parent-saved-badge--${getImageSavedSplit(img)}`"
+                  >
+                    Saved to {{ getImageSavedSplit(img) === 'training' ? 'Training' : 'Validation' }}
+                  </span>
+                  <span v-else class="parent-unsaved-label">Not saved to a dataset</span>
                 </span>
                 <span class="image-card__chevron" :class="{ 'image-card__chevron--expanded': expandedImages[img.guid] }" aria-hidden="true">
                   ⌄
@@ -918,14 +943,14 @@
                       <div v-if="openTaskMenuId === task.guid" class="task-menu__popover">
                         <button
                           type="button"
-                          :disabled="task.task_status !== 'SUCCESS' || task.saved !== 0 || savingDatasetTaskId === task.guid"
+                          :disabled="task.task_status !== 'SUCCESS' || task.saved !== 0 || !!getImageSavedSplit(img) || savingDatasetTaskId === task.guid"
                           @click="addTaskToDataset(task.guid, 'train')"
                         >
                           Add as training data
                         </button>
                         <button
                           type="button"
-                          :disabled="task.task_status !== 'SUCCESS' || task.saved !== 0 || savingDatasetTaskId === task.guid"
+                          :disabled="task.task_status !== 'SUCCESS' || task.saved !== 0 || !!getImageSavedSplit(img) || savingDatasetTaskId === task.guid"
                           @click="addTaskToDataset(task.guid, 'val')"
                         >
                           Add as validation data
@@ -933,7 +958,7 @@
                         <button
                           v-if="task.detection_count === 0"
                           type="button"
-                          :disabled="task.task_status !== 'SUCCESS' || task.saved !== 0 || savingDatasetTaskId === task.guid"
+                          :disabled="task.task_status !== 'SUCCESS' || task.saved !== 0 || !!getImageSavedSplit(img) || savingDatasetTaskId === task.guid"
                           @click="openCorrectionModal(task, img)"
                         >
                           Correct and add as training data
