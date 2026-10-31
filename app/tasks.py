@@ -1,5 +1,4 @@
 import os
-import time
 from pathlib import Path
 
 from ultralytics import YOLO
@@ -101,7 +100,6 @@ def process_sample_image(task_identifier: str, task_id: int, model_name: str):
             "The API and worker must use the same DATABASE_URL and REDIS_URL."
         )
 
-    time.sleep(6)
     print("Starting Processing")
     task_update: InferenceTask | None = repo.update_inference_task(
         db,
@@ -110,7 +108,6 @@ def process_sample_image(task_identifier: str, task_id: int, model_name: str):
         model_name=model_name
     )
 
-    time.sleep(6)
     image_path = inference_image.filepath
     detected_locations = run_localization_inference(image_path, str(model_path))
 
@@ -136,7 +133,6 @@ def process_sample_image(task_identifier: str, task_id: int, model_name: str):
     db.commit()
 
     print("Processed")
-    time.sleep(6)
 
     try:
         task_update = repo.update_inference_task(db, task_id, "SUCCESS", model_name=model_name)
