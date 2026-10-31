@@ -102,7 +102,17 @@
   const activeTab = ref<'home' | 'validation' | 'training' | 'models'>('home')
   const isBehindScenes = ref(false)
   const images = ref<InferenceImage[]>([])
+  const imagesLimit = 20
+  const imagesOffset = ref(0)
+  const imagesTotal = ref(0)
+  const isLoadingMoreImages = ref(false)
+  const imagesHasMore = computed(() => imagesOffset.value < imagesTotal.value)
   const modelRuns = ref<ModelRun[]>(readCachedModelRuns())
+  const modelsLimit = 20
+  const modelsOffset = ref(0)
+  const modelsTotal = ref(modelRuns.value.length)
+  const isLoadingMoreModels = ref(false)
+  const modelsHasMore = computed(() => modelsOffset.value < modelsTotal.value)
   const selectedModel = ref(
     readSelectedModel() || modelRuns.value.find((run) => run.available)?.name || ''
   )
@@ -118,6 +128,20 @@
   const trainingImagesError = ref('')
   const validationImagesLoaded = ref(false)
   const trainingImagesLoaded = ref(false)
+  const datasetImagesLimit = 20
+  const validationImagesOffset = ref(0)
+  const trainingImagesOffset = ref(0)
+  const validationImagesTotal = ref(0)
+  const trainingImagesTotal = ref(0)
+  const isLoadingMoreValidationImages = ref(false)
+  const isLoadingMoreTrainingImages = ref(false)
+  const datasetImagesHasMore = computed(() => {
+    if (activeDatasetSplit.value === 'training') return trainingImagesOffset.value < trainingImagesTotal.value
+    return validationImagesOffset.value < validationImagesTotal.value
+  })
+  const isLoadingMoreDatasetImages = computed(() =>
+    activeDatasetSplit.value === 'training' ? isLoadingMoreTrainingImages.value : isLoadingMoreValidationImages.value
+  )
   const activeDatasetSplit = computed(() => activeTab.value === 'training' ? 'training' : 'validation')
   const activeDatasetImages = computed(() =>
     activeDatasetSplit.value === 'training' ? trainingImages.value : validationImages.value
@@ -193,40 +217,53 @@
   const uploadMessage = ref('')
 
   // Fetch existing uploaded images on mount or after automatic actions
-  const fetchImages = async () => {
+  const fetchImages = async (reset = true) => {
+    const requestedOffset = reset ? 0 : imagesOffset.value
+    if (!reset) isLoadingMoreImages.value = true
     try {
-      const response = await fetch('/images')
+      const response = await fetch(`/images?limit=${imagesLimit}&offset=${requestedOffset}`)
       if (response.ok) {
-        const uploadedImages = await response.json()
-        images.value = uploadedImages.sort((a: InferenceImage, b: InferenceImage) => {
+        const data = await response.json()
+        const uploadedImages = Array.isArray(data) ? data : (data.images || [])
+        const sortedImages = uploadedImages.sort((a: InferenceImage, b: InferenceImage) => {
           const aTime = a.uploaded_at ? new Date(a.uploaded_at).getTime() : 0
           const bTime = b.uploaded_at ? new Date(b.uploaded_at).getTime() : 0
           return bTime - aTime
         })
+        images.value = reset ? sortedImages : [...images.value, ...sortedImages]
+        imagesOffset.value = reset ? sortedImages.length : imagesOffset.value + sortedImages.length
+        imagesTotal.value = Array.isArray(data) ? images.value.length : (data.total ?? imagesOffset.value)
       }
     } catch (err) {
       console.error('Failed to fetch images:', err)
+    } finally {
+      isLoadingMoreImages.value = false
     }
   }
 
-  const fetchModels = async () => {
-    isLoadingModels.value = true
+  const fetchModels = async (reset = true) => {
+    if (reset) isLoadingModels.value = true
+    else isLoadingMoreModels.value = true
     modelsError.value = ''
+    const requestedOffset = reset ? 0 : modelsOffset.value
 
     try {
-      const response = await fetch('/models')
+      const response = await fetch(`/models?limit=${modelsLimit}&offset=${requestedOffset}`)
       if (!response.ok) {
         throw new Error(`Models request failed with status ${response.status}`)
       }
 
       const data = await response.json()
-      modelRuns.value = (data.runs || [])
+      const runs = (data.runs || [])
         .map((run: ModelRun) => ({ ...run, epochs: [...run.epochs].sort((a, b) => b.epoch - a.epoch) }))
         .sort((a: ModelRun, b: ModelRun) => {
           const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
           const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
           return bTime - aTime
         })
+      modelRuns.value = reset ? runs : [...modelRuns.value, ...runs]
+      modelsOffset.value = reset ? runs.length : modelsOffset.value + runs.length
+      modelsTotal.value = data.total ?? modelsOffset.value
       writeBrowserCache('smiley-model-runs', JSON.stringify(modelRuns.value))
       const selectedModelExists = modelRuns.value.some(
         (run) => run.name === selectedModel.value && run.available
@@ -244,6 +281,7 @@
       }
     } finally {
       isLoadingModels.value = false
+      isLoadingMoreModels.value = false
     }
   }
 
@@ -296,32 +334,43 @@
     }
   }
 
-  const fetchDatasetImages = async (split: 'training' | 'validation', refresh = false) => {
+  const fetchDatasetImages = async (split: 'training' | 'validation', refresh = false, append = false) => {
     const loading = split === 'training' ? isLoadingTrainingImages : isLoadingValidationImages
+    const loadingMore = split === 'training' ? isLoadingMoreTrainingImages : isLoadingMoreValidationImages
     const error = split === 'training' ? trainingImagesError : validationImagesError
     const loaded = split === 'training' ? trainingImagesLoaded : validationImagesLoaded
     const datasetImages = split === 'training' ? trainingImages : validationImages
-    loading.value = true
+    const offset = split === 'training' ? trainingImagesOffset : validationImagesOffset
+    const total = split === 'training' ? trainingImagesTotal : validationImagesTotal
+    const requestedOffset = append ? offset.value : 0
+    loading.value = !append
+    loadingMore.value = append
     error.value = ''
 
     try {
-      const response = await fetch(`/${split}-images${refresh ? '?refresh=true' : ''}`)
+      const query = new URLSearchParams({ limit: String(datasetImagesLimit), offset: String(requestedOffset) })
+      if (refresh) query.set('refresh', 'true')
+      const response = await fetch(`/${split}-images?${query.toString()}`)
       if (!response.ok) {
         throw new Error(`${split} images request failed with status ${response.status}`)
       }
 
       const data = await response.json()
-      datasetImages.value = (data.images || []).sort((a: DatasetImage, b: DatasetImage) => {
+      const page = (data.images || []).sort((a: DatasetImage, b: DatasetImage) => {
         const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
         const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
         return bTime - aTime
       })
+      datasetImages.value = append ? [...datasetImages.value, ...page] : page
+      offset.value = append ? offset.value + page.length : page.length
+      total.value = data.total ?? offset.value
       loaded.value = true
     } catch (err) {
       error.value = `Could not load ${split} images. Please try again.`
       console.error(`Failed to fetch ${split} images:`, err)
     } finally {
       loading.value = false
+      loadingMore.value = false
     }
   }
 
@@ -769,7 +818,6 @@
 
   onMounted(() => {
     fetchImages()
-    fetchModels()
     taskPollingInterval = setInterval(pollActiveTasks, 2000)
   })
 
@@ -969,7 +1017,7 @@
                 :aria-expanded="!!expandedImages[img.guid]"
                 @click="toggleExpand(img)"
               >
-                <img class="image-card__thumbnail" :src="`/${img.filepath}`" :alt="`Thumbnail of ${img.name}`" />
+                <img class="image-card__thumbnail" :src="`/${img.filepath}`" :alt="`Thumbnail of ${img.name}`" loading="lazy" decoding="async" />
                 <span class="image-card__details">
                   <strong class="image-card__name">{{ img.name }}</strong>
                   <span class="image-card__path">{{ img.filepath }}</span>
@@ -1002,6 +1050,8 @@
                     class="preview-frame__image"
                     :src="activeTaskId[img.guid] ? `/tasks/${activeTaskId[img.guid]}/rendered-image` : `/${img.filepath}`"
                     :alt="activeTaskId[img.guid] ? `Detection result for ${img.name}` : `Preview of ${img.name}`"
+                    loading="lazy"
+                    decoding="async"
                   />
                   <span
                     v-if="activeTaskId[img.guid] && activeDetections[img.guid]?.length === 0"
@@ -1124,6 +1174,15 @@
             </div>
           </article>
         </div>
+        <button
+          v-if="imagesHasMore"
+          class="button button--secondary lazy-load-button"
+          type="button"
+          :disabled="isLoadingMoreImages"
+          @click="fetchImages(false)"
+        >
+          {{ isLoadingMoreImages ? 'Loading images…' : 'Load more images' }}
+        </button>
       </section>
       </div>
 
@@ -1183,6 +1242,15 @@
             </div>
           </article>
         </div>
+        <button
+          v-if="datasetImagesHasMore"
+          class="button button--secondary lazy-load-button"
+          type="button"
+          :disabled="isLoadingMoreDatasetImages"
+          @click="fetchDatasetImages(activeDatasetSplit, false, true)"
+        >
+          {{ isLoadingMoreDatasetImages ? 'Loading images…' : 'Load more images' }}
+        </button>
       </section>
 
       <section v-else class="models-section" aria-labelledby="models-heading">
@@ -1201,7 +1269,7 @@
 
         <div v-else-if="modelsError" class="validation-error" role="alert">
           <p>{{ modelsError }}</p>
-          <button class="button button--secondary" type="button" @click="fetchModels">
+          <button class="button button--secondary" type="button" @click="() => fetchModels(true)">
             Try again
           </button>
         </div>
@@ -1263,6 +1331,15 @@
             </div>
           </article>
         </div>
+        <button
+          v-if="modelsHasMore"
+          class="button button--secondary lazy-load-button"
+          type="button"
+          :disabled="isLoadingMoreModels"
+          @click="() => fetchModels(false)"
+        >
+          {{ isLoadingMoreModels ? 'Loading models…' : 'Load more models' }}
+        </button>
       </section>
 
       <footer class="page-footer">Smiley Detection <span aria-hidden="true">·</span> Image analysis workspace</footer>

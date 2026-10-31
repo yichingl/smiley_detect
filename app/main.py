@@ -389,34 +389,45 @@ def add_task_to_dataset(
 
 
 @app.get("/images")
-def get_images(db: Session = Depends(get_db)): # TODO paginate and filter
+def get_images(limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+
+    total = db.query(func.count(InferenceImage.id)).scalar() or 0
     image_counts = (
         db.query(InferenceImage, func.count(InferenceTask.id).label("task_count"))
         .outerjoin(InferenceTask, InferenceTask.image_id == InferenceImage.id)
         .group_by(InferenceImage.id)
         .order_by(InferenceImage.uploaded_at.desc(), InferenceImage.id.desc())
+        .offset(offset)
+        .limit(limit)
         .all()
     )
-    return [
-        {
-            "guid": image.guid,
-            "name": image.name,
-            "filepath": image.filepath,
-            "upload_group_id": image.upload_group_id,
-            "uploaded_at": image.uploaded_at,
-            "task_count": task_count,
-            "saved_status": next(
-                (task.saved for task in image.tasks if task.saved != SavedStatus.UNSAVED.value),
-                SavedStatus.UNSAVED.value
-            ),
-            "saved_split": next(
-                ("training" if task.saved == SavedStatus.TRAINING.value else "validation"
-                 for task in image.tasks if task.saved != SavedStatus.UNSAVED.value),
-                None
-            )
-        }
-        for image, task_count in image_counts
-    ]
+    return {
+        "images": [
+            {
+                "guid": image.guid,
+                "name": image.name,
+                "filepath": image.filepath,
+                "upload_group_id": image.upload_group_id,
+                "uploaded_at": image.uploaded_at,
+                "task_count": task_count,
+                "saved_status": next(
+                    (task.saved for task in image.tasks if task.saved != SavedStatus.UNSAVED.value),
+                    SavedStatus.UNSAVED.value
+                ),
+                "saved_split": next(
+                    ("training" if task.saved == SavedStatus.TRAINING.value else "validation"
+                     for task in image.tasks if task.saved != SavedStatus.UNSAVED.value),
+                    None
+                )
+            }
+            for image, task_count in image_counts
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset
+    }
 
 @app.get("/images/{image_guid}/tasks")
 async def get_tasks_for_image(image_guid: str, db: Session = Depends(get_db)):
@@ -532,33 +543,39 @@ def get_corrected_box_preview(
 
 
 @app.get("/validation-images")
-def get_validation_images(refresh: bool = False):
+def get_validation_images(refresh: bool = False, limit: int = 20, offset: int = 0):
     return _get_dataset_images(
         split="validation",
         image_dir=VALIDATION_IMAGE_DIR,
         label_dir=VALIDATION_LABEL_DIR,
         cache_dir=VALIDATION_CACHE_DIR,
         cache_url_prefix="/validation-cache",
-        refresh=refresh
+        refresh=refresh,
+        limit=limit,
+        offset=offset
     )
 
 
 @app.get("/training-images")
-def get_training_images(refresh: bool = False):
+def get_training_images(refresh: bool = False, limit: int = 20, offset: int = 0):
     return _get_dataset_images(
         split="training",
         image_dir=TRAINING_IMAGE_DIR,
         label_dir=TRAINING_LABEL_DIR,
         cache_dir=TRAINING_CACHE_DIR,
         cache_url_prefix="/training-cache",
-        refresh=refresh
+        refresh=refresh,
+        limit=limit,
+        offset=offset
     )
 
 
 @app.get("/models")
-def get_model_runs():
+def get_model_runs(limit: int = 20, offset: int = 0):
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
     if not SAVED_MODELS_DIR.is_dir():
-        return {"runs": []}
+        return {"runs": [], "total": 0, "limit": limit, "offset": offset}
 
     metric_columns = {
         "train_box_loss": "train/box_loss",
@@ -580,7 +597,8 @@ def get_model_runs():
             return max((item.stat().st_mtime for item in candidates), default=run_dir.stat().st_mtime)
 
     run_dirs.sort(key=model_created_timestamp, reverse=True)
-    for run_dir in run_dirs:
+    total = len(run_dirs)
+    for run_dir in run_dirs[offset:offset + limit]:
         note_path = run_dir / "note.txt"
         try:
             note = note_path.read_text(encoding="utf-8").strip() if note_path.is_file() else None
@@ -633,7 +651,7 @@ def get_model_runs():
             "epochs": epochs
         })
 
-    return {"runs": runs}
+    return {"runs": runs, "total": total, "limit": limit, "offset": offset}
 
 
 def _get_dataset_images(
@@ -642,8 +660,12 @@ def _get_dataset_images(
     label_dir: Path,
     cache_dir: Path,
     cache_url_prefix: str,
-    refresh: bool
+    refresh: bool,
+    limit: int,
+    offset: int
 ):
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
     if not image_dir.is_dir():
         raise HTTPException(status_code=500, detail=f"{split.capitalize()} image directory not found")
 
@@ -656,10 +678,16 @@ def _get_dataset_images(
         reverse=True
     )
     if not image_paths:
-        return {"source": "ground_truth_labels", "images": []}
+        return {"source": "ground_truth_labels", "images": [], "total": 0, "limit": limit, "offset": offset}
+
+    total = len(image_paths)
+    page_paths = image_paths[offset:offset + limit]
+    if not page_paths:
+        return {"source": "ground_truth_labels", "images": [], "total": total, "limit": limit, "offset": offset}
 
     signature_data = {
         "source": f"ground_truth_labels_v1:{split}",
+        "pagination": {"limit": limit, "offset": offset},
         "images": [
             {
                 "name": path.name,
@@ -682,7 +710,7 @@ def _get_dataset_images(
     signature = hashlib.sha256(
         json.dumps(signature_data, sort_keys=True).encode("utf-8")
     ).hexdigest()
-    manifest_path = cache_dir / "manifest.json"
+    manifest_path = cache_dir / f"manifest-{offset}-{limit}.json"
 
     with VALIDATION_CACHE_LOCK:
         if manifest_path.is_file() and not refresh:
@@ -706,12 +734,15 @@ def _get_dataset_images(
                 )
                 return {
                     "source": "ground_truth_labels",
-                    "images": cached_images
+                    "images": cached_images,
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset
                 }
 
         cache_version = uuid4().hex
         rendered_images = []
-        for index, image_path in enumerate(image_paths):
+        for index, image_path in enumerate(page_paths, start=offset):
             image = cv2.imread(str(image_path))
             if image is None:
                 raise HTTPException(status_code=500, detail=f"Failed to decode {split} image: {image_path.name}")
@@ -784,20 +815,18 @@ def _get_dataset_images(
                 ).isoformat()
             })
 
-        current_filenames = {image["filename"] for image in rendered_images}
-        for cached_file in cache_dir.glob("*.jpg"):
-            if cached_file.name not in current_filenames:
-                cached_file.unlink()
-
         manifest = {
             "signature": signature,
             "images": rendered_images
         }
-        temporary_manifest = cache_dir / "manifest.tmp"
+        temporary_manifest = cache_dir / f"manifest-{offset}-{limit}.tmp"
         temporary_manifest.write_text(json.dumps(manifest), encoding="utf-8")
         temporary_manifest.replace(manifest_path)
 
         return {
             "source": "ground_truth_labels",
-            "images": rendered_images
+            "images": rendered_images,
+            "total": total,
+            "limit": limit,
+            "offset": offset
         }

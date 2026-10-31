@@ -450,6 +450,11 @@ margin: 0 0 32px;
   margin-top: 34px;
 }
 
+.lazy-load-button {
+  display: block;
+  margin: 20px auto 0;
+}
+
 .library-heading {
   margin-bottom: 16px;
 }
