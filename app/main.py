@@ -296,8 +296,6 @@ def add_task_to_dataset(
 
     if request.accept_no_detections and request.corrected_box is not None:
         raise HTTPException(status_code=400, detail="Accept no detections cannot be combined with a corrected box")
-    if request.corrected_box is not None and request.split != "train":
-        raise HTTPException(status_code=400, detail="Corrected boxes can only be saved as training data")
 
     source_path = (BASE_DIR / task.image.filepath).resolve()
     upload_dir = UPLOAD_DIR.resolve()

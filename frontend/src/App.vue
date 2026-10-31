@@ -172,6 +172,7 @@
   const isLoadingCorrectionPreview = ref(false)
   const isCorrectionPreviewOpen = ref(false)
   const correctionPreviewUrl = ref('')
+  const correctionDatasetSplit = ref<'train' | 'val'>('train')
   const correctionOverlayBox = computed(() => {
     const first = correctionAnchor.value
     const second = correctionCursor.value
@@ -500,6 +501,7 @@
     correctionAnchor.value = null
     correctionCursor.value = null
     correctionError.value = ''
+    correctionDatasetSplit.value = 'train'
     openTaskMenuId.value = ''
   }
 
@@ -611,11 +613,13 @@
     }
   }
 
-  const saveCorrectedTrainingData = async () => {
+  const saveCorrectedDatasetData = async () => {
     const box = correctionBox.value
     const taskGuid = correctionTaskGuid.value
+    const split = correctionDatasetSplit.value
     if (!box || !taskGuid) return
 
+    const splitLabel = split === 'train' ? 'training' : 'validation'
     isSavingCorrection.value = true
     correctionError.value = ''
     datasetSaveMessages.value[taskGuid] = ''
@@ -623,7 +627,7 @@
       const response = await fetch(`/tasks/${taskGuid}/add-to-dataset`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ split: 'train', corrected_box: box })
+        body: JSON.stringify({ split, corrected_box: box })
       })
       const result = await response.json()
       if (!response.ok) {
@@ -634,13 +638,14 @@
         const task = taskList.find((item) => item.guid === taskGuid)
         if (task) task.saved = result.saved
       }
-      datasetSaveMessages.value[taskGuid] = `Saved ${result.image} to training data with your corrected box.`
-      trainingImagesLoaded.value = false
+      datasetSaveMessages.value[taskGuid] = `Saved ${result.image} to ${splitLabel} data with your corrected box.`
+      if (split === 'train') trainingImagesLoaded.value = false
+      else validationImagesLoaded.value = false
       closeCorrectionConfirmation()
       closeCorrectionModal(true)
     } catch (err) {
-      correctionError.value = err instanceof Error ? err.message : 'Could not save corrected training data.'
-      console.error('Failed to save corrected training data:', err)
+      correctionError.value = err instanceof Error ? err.message : `Could not save corrected ${splitLabel} data.`
+      console.error(`Failed to save corrected ${splitLabel} data:`, err)
     } finally {
       isSavingCorrection.value = false
     }
@@ -648,8 +653,10 @@
 
   const saveNoDetections = async () => {
     const taskGuid = correctionTaskGuid.value
+    const split = correctionDatasetSplit.value
     if (!taskGuid) return
-    const accepted = window.confirm('Accept no detections? This image will be saved as training data with no bounding boxes.')
+    const splitLabel = split === 'train' ? 'training' : 'validation'
+    const accepted = window.confirm(`Accept no detections? This image will be saved as ${splitLabel} data with no bounding boxes.`)
     if (!accepted) return
 
     isSavingCorrection.value = true
@@ -659,7 +666,7 @@
       const response = await fetch(`/tasks/${taskGuid}/add-to-dataset`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ split: 'train', accept_no_detections: true })
+        body: JSON.stringify({ split, accept_no_detections: true })
       })
       const result = await response.json()
       if (!response.ok) {
@@ -670,11 +677,12 @@
         const task = taskList.find((item) => item.guid === taskGuid)
         if (task) task.saved = result.saved
       }
-      datasetSaveMessages.value[taskGuid] = `Saved ${result.image} to training data with no detections.`
-      trainingImagesLoaded.value = false
+      datasetSaveMessages.value[taskGuid] = `Saved ${result.image} to ${splitLabel} data with no detections.`
+      if (split === 'train') trainingImagesLoaded.value = false
+      else validationImagesLoaded.value = false
       closeCorrectionModal(true)
     } catch (err) {
-      correctionError.value = err instanceof Error ? err.message : 'Could not save no-detections training data.'
+      correctionError.value = err instanceof Error ? err.message : `Could not save no-detections ${splitLabel} data.`
     } finally {
       isSavingCorrection.value = false
     }
@@ -1517,13 +1525,18 @@
             </svg>
           </div>
           <div class="correction-label">
-            <strong>YOLO training label (class x_center y_center width height)</strong>
+            <strong>{{ correctionDatasetSplit === 'train' ? 'YOLO training' : 'YOLO validation' }} label (class x_center y_center width height)</strong>
             <code>{{ correctionLabelPreview }}</code>
           </div>
           <p v-if="correctionError" class="correction-modal__error" role="alert">{{ correctionError }}</p>
         </div>
-
-        <footer class="correction-modal__footer">
+        <footer class="correction-modal__footer">          <label class="correction-dataset-picker">
+            <span>Save to</span>
+            <select v-model="correctionDatasetSplit" aria-label="Dataset split">
+              <option value="train">Training</option>
+              <option value="val">Validation</option>
+            </select>
+          </label>
           <button
             class="button button--secondary"
             type="button"
@@ -1575,10 +1588,10 @@
       >
         <header class="correction-modal__header">
           <div>
-            <p class="eyebrow">CONFIRM TRAINING DATA</p>
+            <p class="eyebrow">CONFIRM {{ correctionDatasetSplit === 'train' ? 'TRAINING' : 'VALIDATION' }} DATA</p>
             <h2 id="correction-confirm-heading">Review the corrected image</h2>
             <p class="section-description">
-              Confirm that the blue corrective box correctly surrounds the smiley before saving this image and label to training data. Existing red prediction boxes may remain visible.
+              Confirm that the blue corrective box correctly surrounds the smiley before saving this image and label to {{ correctionDatasetSplit === 'train' ? 'training' : 'validation' }} data. Existing red prediction boxes may remain visible.
             </p>
           </div>
         </header>
@@ -1589,7 +1602,7 @@
             :alt="`Backend-rendered bounding box preview for ${correctionImage?.name || 'the image'}`"
           />
           <div class="correction-label">
-            <strong>YOLO training label (class x_center y_center width height)</strong>
+            <strong>{{ correctionDatasetSplit === 'train' ? 'YOLO training' : 'YOLO validation' }} label (class x_center y_center width height)</strong>
             <code>{{ correctionLabelPreview }}</code>
           </div>
           <p v-if="correctionError" class="correction-modal__error" role="alert">{{ correctionError }}</p>
@@ -1607,7 +1620,7 @@
             class="button button--primary"
             type="button"
             :disabled="isSavingCorrection"
-            @click="saveCorrectedTrainingData"
+            @click="saveCorrectedDatasetData"
           >
             {{ isSavingCorrection ? 'Saving…' : 'Confirm and save' }}
           </button>
