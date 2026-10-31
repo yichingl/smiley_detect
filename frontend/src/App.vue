@@ -937,7 +937,6 @@
                   :checked="selectedBulkImageIds.includes(img.guid)"
                   @change="toggleBulkImageSelection(img.guid)"
                 />
-                <span>Selected</span>
               </label>
               <button
                 class="image-card__toggle"

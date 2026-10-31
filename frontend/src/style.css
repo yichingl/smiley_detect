@@ -462,22 +462,6 @@ margin: 0 0 32px;
   flex-wrap: wrap;
 }
 
-.bulk-image-select {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #65738a;
-  font-size: 10px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.bulk-image-select input {
-  width: 16px;
-  height: 16px;
-  accent-color: #315fca;
-}
-
 .library-heading .eyebrow {
   margin-bottom: 4px;
 }
