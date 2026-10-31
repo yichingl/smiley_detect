@@ -71,6 +71,11 @@ class ProcessImageRequest(BaseModel):
     model_name: str
 
 
+class BulkProcessImagesRequest(BaseModel):
+    model_name: str
+    image_guids: List[str]
+
+
 class CorrectedBox(BaseModel):
     x_min: float
     y_min: float
@@ -181,6 +186,53 @@ def trigger_image_processing(
         "task_identifier": db_task_update.task_identifier,
         "status": db_task_update.task_status,
         "model_name": db_task_update.model_name
+    }
+
+
+@app.post("/process-images/bulk")
+def trigger_bulk_image_processing(
+    request: BulkProcessImagesRequest,
+    db: Session = Depends(get_db)
+):
+    if not request.image_guids:
+        raise HTTPException(status_code=400, detail="At least one image GUID is required")
+    if tasks.get_model_path(request.model_name) is None:
+        raise HTTPException(status_code=404, detail=f"Model run '{request.model_name}' not found or has no best checkpoint")
+
+    unique_image_guids = list(dict.fromkeys(request.image_guids))
+    created = []
+    failed = []
+
+    for image_guid in unique_image_guids:
+        try:
+            db_task_record = repo.create_inference_task(db, image_guid, model_name=request.model_name)
+            if db_task_record is None:
+                failed.append({"image_guid": image_guid, "error": "Image not found"})
+                continue
+
+            tasks.process_sample_image.delay(
+                db_task_record.task_identifier,
+                db_task_record.id,
+                request.model_name
+            )
+            repo.update_inference_task(db, db_task_record.id, "PENDING", model_name=request.model_name)
+            created.append({
+                "image_guid": image_guid,
+                "task_guid": db_task_record.guid,
+                "task_identifier": db_task_record.task_identifier,
+                "status": "PENDING",
+                "model_name": request.model_name
+            })
+        except Exception as exc:
+            db.rollback()
+            failed.append({"image_guid": image_guid, "error": str(exc)})
+
+    return {
+        "model_name": request.model_name,
+        "created_count": len(created),
+        "failed_count": len(failed),
+        "created": created,
+        "failed": failed
     }
 
 @app.get("/task-details/{task_guid}")

@@ -133,6 +133,9 @@
   const openTaskMenuId = ref('')
   const savingDatasetTaskId = ref('')
   const datasetSaveMessages = ref<Record<string, string>>({})
+  const selectedBulkImageIds = ref<string[]>([])
+  const isStartingBulkTasks = ref(false)
+  const bulkTaskMessage = ref('')
   const correctionTaskGuid = ref('')
   const correctionImage = ref<InferenceImage | null>(null)
   const correctionImageDimensions = ref<{ width: number; height: number } | null>(null)
@@ -661,6 +664,47 @@
     }
   }
 
+  const toggleBulkImageSelection = (imageGuid: string) => {
+    selectedBulkImageIds.value = selectedBulkImageIds.value.includes(imageGuid)
+      ? selectedBulkImageIds.value.filter((guid) => guid !== imageGuid)
+      : [...selectedBulkImageIds.value, imageGuid]
+  }
+
+  const startBulkTasks = async (imageGuids: string[]) => {
+    if (!selectedModel.value) {
+      isModelPickerOpen.value = true
+      return
+    }
+    if (imageGuids.length === 0) {
+      bulkTaskMessage.value = 'Select at least one image to start tasks.'
+      return
+    }
+
+    isStartingBulkTasks.value = true
+    bulkTaskMessage.value = ''
+    try {
+      const response = await fetch('/process-images/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_name: selectedModel.value, image_guids: imageGuids })
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(result.detail || `Bulk task request failed with status ${response.status}`)
+      }
+
+      bulkTaskMessage.value = result.failed_count > 0
+        ? `Started ${result.created_count} tasks; ${result.failed_count} failed.`
+        : `Started tasks for ${result.created_count} ${result.created_count === 1 ? 'image' : 'images'}.`
+      selectedBulkImageIds.value = []
+      await Promise.all(imageGuids.map((guid) => fetchTasksForImage(guid)))
+    } catch (err) {
+      bulkTaskMessage.value = err instanceof Error ? err.message : 'Could not start bulk tasks.'
+    } finally {
+      isStartingBulkTasks.value = false
+    }
+  }
+
   // Start a task for the image guid
   const startTaskOnImage = async (imgGuid: string) => {
     if (!selectedModel.value) {
@@ -839,11 +883,39 @@
             <h2 id="library-heading">Image library</h2>
             <p class="section-description">Select an image to inspect it and manage detection tasks.</p>
           </div>
-          <button class="button button--secondary" type="button" @click="fetchImages">
-            <span aria-hidden="true">↻</span>
-            Refresh
-          </button>
+          <div class="library-heading__actions">
+            <button
+              class="button button--secondary"
+              type="button"
+              :disabled="isStartingBulkTasks || images.length === 0"
+              @click="startBulkTasks(images.map((img) => img.guid))"
+            >
+              Start tasks for all
+            </button>
+            <button
+              class="button button--primary"
+              type="button"
+              :disabled="isStartingBulkTasks || selectedBulkImageIds.length === 0"
+              @click="startBulkTasks(selectedBulkImageIds)"
+            >
+              <span v-if="isStartingBulkTasks" class="button-spinner" aria-hidden="true"></span>
+              {{ isStartingBulkTasks ? 'Starting tasks…' : `Start tasks (${selectedBulkImageIds.length})` }}
+            </button>
+            <button class="button button--secondary" type="button" @click="fetchImages">
+              <span aria-hidden="true">↻</span>
+              Refresh
+            </button>
+          </div>
         </div>
+
+        <p
+          v-if="bulkTaskMessage"
+          class="feedback-message"
+          :class="bulkTaskMessage.startsWith('Started') ? 'feedback-message--success' : 'feedback-message--error'"
+          role="status"
+        >
+          {{ bulkTaskMessage }}
+        </p>
 
         <div v-if="images.length === 0" class="empty-state">
           <div class="empty-state__icon" aria-hidden="true">▧</div>
@@ -859,6 +931,14 @@
             :class="{ 'image-card--menu-open': openTaskMenuId && imageDetails[img.guid]?.some((task) => task.guid === openTaskMenuId) }"
           >
             <div class="image-card__summary">
+              <label class="bulk-image-select" :title="`Select ${img.name}`">
+                <input
+                  type="checkbox"
+                  :checked="selectedBulkImageIds.includes(img.guid)"
+                  @change="toggleBulkImageSelection(img.guid)"
+                />
+                <span>Selected</span>
+              </label>
               <button
                 class="image-card__toggle"
                 type="button"
