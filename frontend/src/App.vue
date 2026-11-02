@@ -63,17 +63,34 @@
     epochs: ModelEpoch[]
   }
 
+  const normalizeEpochMetrics = (run: any): ModelRun => ({
+    ...run,
+    epochs: Array.isArray(run.epochs)
+      ? run.epochs.map((epoch: any) => ({
+          epoch: Number(epoch.epoch),
+          train_box_loss: Number(epoch.train_box_loss),
+          val_box_loss: Number(epoch.val_box_loss),
+          precision: Number(epoch.precision),
+          recall: Number(epoch.recall),
+          map50: Number(epoch.map50),
+          map50_95: Number(epoch.map50_95)
+        })).filter((epoch: ModelEpoch) => Number.isFinite(epoch.epoch))
+      : []
+  })
+
   const readCachedModelRuns = (): ModelRun[] => {
     try {
       const cachedModels = localStorage.getItem('smiley-model-runs')
       const parsedModels: unknown = cachedModels ? JSON.parse(cachedModels) : []
       return Array.isArray(parsedModels)
-        ? parsedModels.filter((run): run is ModelRun =>
-            typeof run?.name === 'string' &&
-            Array.isArray(run.epochs) &&
-            typeof run.available === 'boolean' &&
-            (typeof run.best_epoch === 'number' || run.best_epoch === null)
-          )
+        ? parsedModels
+            .filter((run) =>
+              typeof run?.name === 'string' &&
+              Array.isArray(run.epochs) &&
+              typeof run.available === 'boolean' &&
+              (typeof run.best_epoch === 'number' || run.best_epoch === null)
+            )
+            .map((run) => normalizeEpochMetrics(run))
         : []
     } catch (err) {
       console.warn('Could not read cached model runs:', err)
@@ -117,6 +134,7 @@
     readSelectedModel() || modelRuns.value.find((run) => run.available)?.name || ''
   )
   const isModelPickerOpen = ref(false)
+  const trendRun = ref<ModelRun | null>(null)
   const isLoadingModels = ref(false)
   const modelsError = ref('')
   const modelsLoaded = ref(false)
@@ -257,6 +275,7 @@
 
       const data = await response.json()
       const runs = (data.runs || [])
+        .map((run: ModelRun) => normalizeEpochMetrics(run))
         .map((run: ModelRun) => ({ ...run, epochs: [...run.epochs].sort((a, b) => b.epoch - a.epoch) }))
         .sort((a: ModelRun, b: ModelRun) => {
           const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
@@ -287,7 +306,57 @@
     }
   }
 
-  const formatMetric = (value: number) => value.toFixed(4)
+  const formatMetric = (value: number | null | undefined) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+    return value.toFixed(4)
+  }
+
+  const trendMetrics = [
+    { key: 'train_box_loss', label: 'Train box loss', color: '#4f7bd9' },
+    { key: 'val_box_loss', label: 'Validation box loss', color: '#e08b45' },
+    { key: 'precision', label: 'Precision', color: '#5b9c7a' },
+    { key: 'recall', label: 'Recall', color: '#9b6bb0' },
+    { key: 'map50', label: 'mAP50', color: '#4f9aab' },
+    { key: 'map50_95', label: 'mAP50–95', color: '#d15f75' }
+  ] as const
+
+  const getTrendEpochs = (run: ModelRun | null) =>
+    run ? [...run.epochs].sort((a, b) => a.epoch - b.epoch) : []
+
+  const getMetricChart = (run: ModelRun | null, metricKey: keyof ModelEpoch) => {
+    const epochs = getTrendEpochs(run)
+    const width = 360
+    const height = 170
+    const left = 42
+    const right = 12
+    const top = 12
+    const bottom = 28
+    const plotWidth = width - left - right
+    const plotHeight = height - top - bottom
+    const points = epochs
+      .map((epoch) => ({ epoch: epoch.epoch, value: epoch[metricKey] }))
+      .filter((point): point is { epoch: number; value: number } => typeof point.value === 'number' && Number.isFinite(point.value))
+
+    if (points.length === 0) return { path: '', min: 0, max: 0, points: [], width, height, left, top, plotWidth, plotHeight }
+
+    const values = points.map((point) => point.value)
+    const min = Math.min(...values)
+    const max = Math.max(...values)
+    const range = max - min || 1
+    const firstEpoch = points[0].epoch
+    const lastEpoch = points[points.length - 1].epoch
+    const epochRange = lastEpoch - firstEpoch || 1
+    const chartPoints = points.map((point) => ({
+      x: left + (points.length === 1 ? plotWidth / 2 : ((point.epoch - firstEpoch) / epochRange) * plotWidth),
+      y: top + ((max - point.value) / range) * plotHeight,
+      label: `${point.epoch}`,
+      value: point.value
+    }))
+    const path = chartPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ')
+    return { path, min, max, points: chartPoints, width, height, left, top, plotWidth, plotHeight }
+  }
+
+  const closeTrendModal = () => { trendRun.value = null }
 
   const getImageSavedSplit = (img: InferenceImage) => {
     if (img.saved_status === 1 || img.saved_split === 'training') return 'training'
@@ -312,8 +381,19 @@
 
   const formatCreatedAt = (createdAt?: string) => formatDateTime(createdAt, 'Created date unavailable')
 
-  const getBestEpoch = (run: ModelRun) =>
-    run.epochs.find((epoch) => epoch.epoch === run.best_epoch)
+  const getBestEpoch = (run: ModelRun) => {
+    const exact = run.epochs.find((epoch) => epoch.epoch === run.best_epoch)
+    if (exact) return exact
+    if (run.epochs.length === 0) return null
+
+    return [...run.epochs].sort((a, b) => {
+      const aScore = 0.1 * (a.map50 || 0) + 0.9 * (a.map50_95 || 0)
+      const bScore = 0.1 * (b.map50 || 0) + 0.9 * (b.map50_95 || 0)
+      return bScore - aScore
+    })[0]
+  }
+
+  const getBestEpochNumber = (run: ModelRun) => getBestEpoch(run)?.epoch ?? run.best_epoch
 
   const getBestEpochRows = (run: ModelRun) => {
     const epoch = getBestEpoch(run)
@@ -331,7 +411,7 @@
 
   const openModelPicker = async () => {
     isModelPickerOpen.value = true
-    if (modelRuns.value.length === 0 && !isLoadingModels.value) {
+    if (!isLoadingModels.value) {
       await fetchModels()
     }
   }
@@ -893,12 +973,6 @@
           <h1>Smiley Detection</h1>
           <p class="page-header__subtitle">Upload images, run detection, and review your results.</p>
         </div>
-        <div class="header-actions">
-          <div class="image-count" aria-live="polite">
-            <span class="image-count__value">{{ images.length }}</span>
-            <span>{{ images.length === 1 ? 'image' : 'images' }} in library</span>
-          </div>
-        </div>
       </header>
 
       <nav v-if="isBehindScenes" class="tab-nav" aria-label="Behind the scenes navigation">
@@ -1184,7 +1258,7 @@
                           :disabled="task.task_status !== 'SUCCESS' || task.saved !== 0 || !!getImageSavedSplit(img) || savingDatasetTaskId === task.guid"
                           @click="openCorrectionModal(task, img)"
                         >
-                          Correct and add as training data
+                          Correct and add as training/validation data
                         </button>
                       </div>
                     </div>
@@ -1314,15 +1388,25 @@
               <div class="model-run__title-group">
                 <div class="model-run__title">
                   <h3 :title="run.note || undefined">{{ run.name }}</h3>
-                  <span v-if="run.best_epoch !== null" class="model-run__best">
-                    Best - Epoch {{ run.best_epoch }}
+                  <span v-if="getBestEpochNumber(run) !== null" class="model-run__best">
+                    Best - Epoch {{ getBestEpochNumber(run) }}
                   </span>
                 </div>
                 <time v-if="run.created_at" :datetime="run.created_at" class="created-on">
                   Created {{ formatCreatedAt(run.created_at) }}
                 </time>
               </div>
-              <span class="model-run__epoch-count">{{ run.epochs.length }} epochs</span>
+              <div class="model-run__actions">
+                <button
+                  v-if="run.epochs.length"
+                  class="button button--secondary model-run__trends-button"
+                  type="button"
+                  @click="trendRun = run"
+                >
+                  View Trends
+                </button>
+                <span class="model-run__epoch-count">{{ run.epochs.length }} epochs</span>
+              </div>
             </header>
             <div v-if="run.epochs.length === 0" class="task-empty">
               No epoch metrics found for this run.
@@ -1344,7 +1428,7 @@
                   <tr
                     v-for="epoch in getSortedEpochRows(run)"
                     :key="epoch.epoch"
-                    :class="{ 'model-run__best-row': epoch.epoch === run.best_epoch }"
+                    :class="{ 'model-run__best-row': epoch.epoch === getBestEpochNumber(run) }"
                   >
                     <th scope="row">{{ epoch.epoch }}</th>
                     <td>{{ formatMetric(epoch.train_box_loss) }}</td>
@@ -1409,9 +1493,17 @@
             <div class="model-picker__run-heading">
               <div class="model-run__title">
                 <h3 :title="run.note || undefined">{{ run.name }}</h3>
-                <span v-if="run.best_epoch !== null" class="model-run__best">
-                  Best - Epoch {{ run.best_epoch }}
+                <span v-if="getBestEpochNumber(run) !== null" class="model-run__best">
+                  Best - Epoch {{ getBestEpochNumber(run) }}
                 </span>
+                <p v-if="getBestEpoch(run)" class="model-picker__best-values">
+                  Train {{ formatMetric(getBestEpoch(run)?.train_box_loss) }} ·
+                  Val {{ formatMetric(getBestEpoch(run)?.val_box_loss) }} ·
+                  Precision {{ formatMetric(getBestEpoch(run)?.precision) }} ·
+                  Recall {{ formatMetric(getBestEpoch(run)?.recall) }} ·
+                  mAP50 {{ formatMetric(getBestEpoch(run)?.map50) }} ·
+                  mAP50–95 {{ formatMetric(getBestEpoch(run)?.map50_95) }}
+                </p>
                 <p v-if="!run.available" class="model-picker__unavailable">
                   No best.pt checkpoint is available for this run.
                 </p>
@@ -1456,6 +1548,73 @@
                 </tbody>
               </table>
             </div>
+          </article>
+        </div>
+      </section>
+    </div>
+
+    <div
+      v-if="trendRun"
+      class="trend-modal-backdrop"
+      role="presentation"
+      @click.self="closeTrendModal"
+    >
+      <section class="trend-modal" role="dialog" aria-modal="true" aria-labelledby="trend-modal-heading">
+        <header class="trend-modal__header">
+          <div>
+            <p class="eyebrow">TRAINING TRENDS</p>
+            <h2 id="trend-modal-heading">{{ trendRun.name }}</h2>
+            <p class="section-description">Metrics across all recorded epochs.</p>
+          </div>
+          <button class="model-picker__close" type="button" aria-label="Close trends" @click="closeTrendModal">×</button>
+        </header>
+        <div class="trend-modal__body">
+          <article v-for="metric in trendMetrics" :key="metric.key" class="trend-chart">
+            <header class="trend-chart__header">
+              <h3>{{ metric.label }}</h3>
+              <span v-if="getMetricChart(trendRun, metric.key).points.length">
+                {{ formatMetric(getMetricChart(trendRun, metric.key).min) }}–{{ formatMetric(getMetricChart(trendRun, metric.key).max) }}
+              </span>
+            </header>
+            <svg
+              class="trend-chart__svg"
+              :viewBox="`0 0 ${getMetricChart(trendRun, metric.key).width} ${getMetricChart(trendRun, metric.key).height}`"
+              role="img"
+              :aria-label="`${metric.label} by epoch`"
+            >
+              <line
+                :x1="getMetricChart(trendRun, metric.key).left"
+                :x2="getMetricChart(trendRun, metric.key).width - 12"
+                :y1="getMetricChart(trendRun, metric.key).height - 28"
+                :y2="getMetricChart(trendRun, metric.key).height - 28"
+                class="trend-chart__axis"
+              />
+              <polyline
+                v-if="getMetricChart(trendRun, metric.key).path"
+                :points="getMetricChart(trendRun, metric.key).points.map((point) => `${point.x},${point.y}`).join(' ')"
+                fill="none"
+                :stroke="metric.color"
+                stroke-width="3"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <circle
+                v-for="point in getMetricChart(trendRun, metric.key).points"
+                :key="point.label"
+                :cx="point.x"
+                :cy="point.y"
+                r="3.5"
+                :fill="metric.color"
+              />
+              <text
+                v-for="point in getMetricChart(trendRun, metric.key).points"
+                :key="`label-${point.label}`"
+                :x="point.x"
+                :y="getMetricChart(trendRun, metric.key).height - 10"
+                class="trend-chart__label"
+                text-anchor="middle"
+              >{{ point.label }}</text>
+            </svg>
           </article>
         </div>
       </section>
