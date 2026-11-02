@@ -89,6 +89,10 @@ class AddTaskToDatasetRequest(BaseModel):
     accept_no_detections: bool = False
 
 
+class RelabelDatasetRequest(BaseModel):
+    corrected_box: CorrectedBox | None = None
+
+
 def _validated_corrected_box(box: CorrectedBox, image_width: int, image_height: int) -> tuple[int, int, int, int]:
     coordinates = (box.x_min, box.y_min, box.x_max, box.y_max)
     if not all(math.isfinite(value) for value in coordinates):
@@ -540,8 +544,97 @@ def get_corrected_box_preview(
     return Response(content=encoded_image.tobytes(), media_type="image/jpeg")
 
 
+@app.post("/dataset/{split}/images/{image_name}/relabel")
+def relabel_dataset_image(
+    split: Literal["training", "validation"],
+    image_name: str,
+    request: RelabelDatasetRequest
+):
+    split_dirs = {
+        "training": (TRAINING_IMAGE_DIR, TRAINING_LABEL_DIR),
+        "validation": (VALIDATION_IMAGE_DIR, VALIDATION_LABEL_DIR)
+    }
+    image_dir, label_dir = split_dirs[split]
+
+    if Path(image_name).name != image_name or image_name in {"", ".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid image filename")
+
+    image_path = image_dir / image_name
+    if image_path.suffix.lower() not in {".jpg", ".jpeg", ".png"} or not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Dataset image not found")
+
+    image = cv2.imread(str(image_path))
+    if image is None:
+        raise HTTPException(status_code=500, detail="Failed to decode dataset image")
+    image_height, image_width = image.shape[:2]
+
+    label_lines = []
+    if request.corrected_box is not None:
+        box = _validated_corrected_box(request.corrected_box, image_width, image_height)
+        x_min, y_min, x_max, y_max = box
+        center_x = ((x_min + x_max) / 2) / image_width
+        center_y = ((y_min + y_max) / 2) / image_height
+        box_width = (x_max - x_min) / image_width
+        box_height = (y_max - y_min) / image_height
+        label_lines.append(f"0 {center_x:.6f} {center_y:.6f} {box_width:.6f} {box_height:.6f}")
+
+    label_path = label_dir / f"{image_path.stem}.txt"
+    temporary_label = label_dir / f"{label_path.name}.{uuid4().hex}.tmp"
+    try:
+        temporary_label.write_text(
+            "\n".join(label_lines) + ("\n" if label_lines else ""),
+            encoding="utf-8"
+        )
+        temporary_label.replace(label_path)
+    except OSError as exc:
+        temporary_label.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Failed to save dataset label: {exc.strerror or str(exc)}") from exc
+
+    cache_dir = VALIDATION_CACHE_DIR if split == "validation" else TRAINING_CACHE_DIR
+    cache_url_prefix = "/validation-cache" if split == "validation" else "/training-cache"
+    rendered_image = cv2.imread(str(image_path))
+    if rendered_image is None:
+        raise HTTPException(status_code=500, detail="Failed to render relabeled image")
+    rendered_height, rendered_width = rendered_image.shape[:2]
+    if label_path.is_file():
+        for line_number, line in enumerate(label_path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            fields = line.split()
+            if len(fields) != 5:
+                raise HTTPException(status_code=500, detail=f"Invalid YOLO label format in {label_path.name}:{line_number}")
+            try:
+                class_value = float(fields[0])
+                center_x, center_y, box_width, box_height = map(float, fields[1:])
+            except ValueError as exc:
+                raise HTTPException(status_code=500, detail=f"Non-numeric YOLO label in {label_path.name}:{line_number}") from exc
+            if not class_value.is_integer() or class_value < 0 or not all(0 <= value <= 1 for value in (center_x, center_y, box_width, box_height)):
+                raise HTTPException(status_code=500, detail=f"Out-of-range YOLO label in {label_path.name}:{line_number}")
+            x_min = max(0, round((center_x - box_width / 2) * rendered_width))
+            y_min = max(0, round((center_y - box_height / 2) * rendered_height))
+            x_max = min(rendered_width - 1, round((center_x + box_width / 2) * rendered_width))
+            y_max = min(rendered_height - 1, round((center_y + box_height / 2) * rendered_height))
+            cv2.rectangle(rendered_image, (x_min, y_min), (x_max, y_max), (0, 0, 255), 2)
+            class_id = int(class_value)
+            cv2.putText(rendered_image, f"Class {class_id}", (x_min, max(y_min - 8, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+    cache_filename = f"relabel-{image_path.stem}-{uuid4().hex}.jpg"
+    success, encoded_image = cv2.imencode(".jpg", rendered_image)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to encode relabeled image")
+    (cache_dir / cache_filename).write_bytes(encoded_image.tobytes())
+
+    return {
+        "split": split,
+        "image": image_name,
+        "label": label_path.name,
+        "detection_count": len(label_lines),
+        "image_url": f"{cache_url_prefix}/{quote(cache_filename)}?v={uuid4().hex}"
+    }
+
+
 @app.get("/validation-images")
-def get_validation_images(refresh: bool = False, limit: int = 20, offset: int = 0):
+def get_validation_images(refresh: bool = False, limit: int = 20, offset: int = 0, order: str = "newest"):
     return _get_dataset_images(
         split="validation",
         image_dir=VALIDATION_IMAGE_DIR,
@@ -550,12 +643,13 @@ def get_validation_images(refresh: bool = False, limit: int = 20, offset: int = 
         cache_url_prefix="/validation-cache",
         refresh=refresh,
         limit=limit,
-        offset=offset
+        offset=offset,
+        order=order
     )
 
 
 @app.get("/training-images")
-def get_training_images(refresh: bool = False, limit: int = 20, offset: int = 0):
+def get_training_images(refresh: bool = False, limit: int = 20, offset: int = 0, order: str = "newest"):
     return _get_dataset_images(
         split="training",
         image_dir=TRAINING_IMAGE_DIR,
@@ -564,14 +658,16 @@ def get_training_images(refresh: bool = False, limit: int = 20, offset: int = 0)
         cache_url_prefix="/training-cache",
         refresh=refresh,
         limit=limit,
-        offset=offset
+        offset=offset,
+        order=order
     )
 
 
 @app.get("/models")
-def get_model_runs(limit: int = 20, offset: int = 0):
+def get_model_runs(limit: int = 20, offset: int = 0, order: str = "newest"):
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
+    order = "oldest" if order == "oldest" else "newest"
     if not SAVED_MODELS_DIR.is_dir():
         return {"runs": [], "total": 0, "limit": limit, "offset": offset}
 
@@ -594,10 +690,12 @@ def get_model_runs(limit: int = 20, offset: int = 0):
             candidates = [item for item in run_dir.rglob("*") if item.is_file()]
             return max((item.stat().st_mtime for item in candidates), default=run_dir.stat().st_mtime)
 
-    run_dirs.sort(key=model_created_timestamp, reverse=True)
+    run_dirs.sort(key=model_created_timestamp, reverse=(order == "newest"))
     total = len(run_dirs)
     for run_dir in run_dirs[offset:offset + limit]:
-        note_path = run_dir / "note.txt"
+        note_path = run_dir / "notes.txt"
+        if not note_path.is_file():
+            note_path = run_dir / "note.txt"
         try:
             note = note_path.read_text(encoding="utf-8").strip() if note_path.is_file() else None
         except OSError as exc:
@@ -660,9 +758,11 @@ def _get_dataset_images(
     cache_url_prefix: str,
     refresh: bool,
     limit: int,
-    offset: int
+    offset: int,
+    order: str = "newest"
 ):
     limit = max(1, min(limit, 100))
+    order = "oldest" if order == "oldest" else "newest"
     offset = max(0, offset)
     if not image_dir.is_dir():
         raise HTTPException(status_code=500, detail=f"{split.capitalize()} image directory not found")
@@ -673,7 +773,7 @@ def _get_dataset_images(
             if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png"}
         ),
         key=lambda path: path.stat().st_mtime_ns,
-        reverse=True
+        reverse=(order == "newest")
     )
     if not image_paths:
         return {"source": "ground_truth_labels", "images": [], "total": 0, "limit": limit, "offset": offset}
@@ -685,6 +785,7 @@ def _get_dataset_images(
 
     signature_data = {
         "source": f"ground_truth_labels_v1:{split}",
+        "order": order,
         "pagination": {"limit": limit, "offset": offset},
         "images": [
             {
@@ -708,7 +809,7 @@ def _get_dataset_images(
     signature = hashlib.sha256(
         json.dumps(signature_data, sort_keys=True).encode("utf-8")
     ).hexdigest()
-    manifest_path = cache_dir / f"manifest-{offset}-{limit}.json"
+    manifest_path = cache_dir / f"manifest-{order}-{offset}-{limit}.json"
 
     with VALIDATION_CACHE_LOCK:
         if manifest_path.is_file() and not refresh:
@@ -728,7 +829,7 @@ def _get_dataset_images(
                         ).isoformat()
                 cached_images.sort(
                     key=lambda image: image_times.get(image["name"], 0),
-                    reverse=True
+                    reverse=(order == "newest")
                 )
                 return {
                     "source": "ground_truth_labels",
@@ -817,7 +918,7 @@ def _get_dataset_images(
             "signature": signature,
             "images": rendered_images
         }
-        temporary_manifest = cache_dir / f"manifest-{offset}-{limit}.tmp"
+        temporary_manifest = cache_dir / f"manifest-{order}-{offset}-{limit}.tmp"
         temporary_manifest.write_text(json.dumps(manifest), encoding="utf-8")
         temporary_manifest.replace(manifest_path)
 

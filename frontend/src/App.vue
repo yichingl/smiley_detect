@@ -125,6 +125,11 @@
   const isLoadingMoreImages = ref(false)
   const imagesHasMore = computed(() => imagesOffset.value < imagesTotal.value)
   const modelRuns = ref<ModelRun[]>(readCachedModelRuns())
+  const modelSortOrder = ref<'newest' | 'oldest'>('newest')
+  const changeModelSort = (event: Event) => {
+    modelSortOrder.value = (event.target as HTMLSelectElement).value as 'newest' | 'oldest'
+    void fetchModels(true)
+  }
   const modelsLimit = 20
   const modelsOffset = ref(0)
   const modelsTotal = ref(modelRuns.value.length)
@@ -140,6 +145,11 @@
   const modelsLoaded = ref(false)
   const validationImages = ref<DatasetImage[]>([])
   const trainingImages = ref<DatasetImage[]>([])
+  const datasetSortOrder = ref<'newest' | 'oldest'>('newest')
+  const changeDatasetSort = (event: Event) => {
+    datasetSortOrder.value = (event.target as HTMLSelectElement).value as 'newest' | 'oldest'
+    void fetchDatasetImages(activeDatasetSplit.value)
+  }
   const isLoadingValidationImages = ref(false)
   const isLoadingTrainingImages = ref(false)
   const validationImagesError = ref('')
@@ -164,6 +174,16 @@
   const activeDatasetImages = computed(() =>
     activeDatasetSplit.value === 'training' ? trainingImages.value : validationImages.value
   )
+  const sortedActiveDatasetImages = computed(() => [...activeDatasetImages.value].sort((a, b) => {
+    const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
+    const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
+    return datasetSortOrder.value === 'oldest' ? aTime - bTime : bTime - aTime
+  }))
+  const sortedModelRuns = computed(() => [...modelRuns.value].sort((a, b) => {
+    const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
+    const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
+    return modelSortOrder.value === 'oldest' ? aTime - bTime : bTime - aTime
+  }))
   const isLoadingDatasetImages = computed(() =>
     activeDatasetSplit.value === 'training' ? isLoadingTrainingImages.value : isLoadingValidationImages.value
   )
@@ -191,6 +211,15 @@
   const isCorrectionPreviewOpen = ref(false)
   const correctionPreviewUrl = ref('')
   const correctionDatasetSplit = ref<'train' | 'val'>('train')
+  const relabelImage = ref<DatasetImage | null>(null)
+  const relabelImageName = ref('')
+  const relabelSplit = ref<'training' | 'validation'>('training')
+  const relabelImageDimensions = ref<{ width: number; height: number } | null>(null)
+  const relabelBox = ref<BoxCoordinates | null>(null)
+  const relabelAnchor = ref<{ x: number; y: number } | null>(null)
+  const relabelCursor = ref<{ x: number; y: number } | null>(null)
+  const relabelError = ref('')
+  const isSavingRelabel = ref(false)
   const correctionOverlayBox = computed(() => {
     const first = correctionAnchor.value
     const second = correctionCursor.value
@@ -213,6 +242,21 @@
     }
     return null
   })
+  const relabelOverlayBox = computed(() => {
+    const first = relabelAnchor.value
+    const second = relabelCursor.value
+    const box = relabelBox.value
+    if (box) return { x: box.x_min, y: box.y_min, width: box.x_max - box.x_min, height: box.y_max - box.y_min }
+    if (first && second) return { x: Math.min(first.x, second.x), y: Math.min(first.y, second.y), width: Math.abs(second.x - first.x), height: Math.abs(second.y - first.y) }
+    return null
+  })
+  const relabelLabelPreview = computed(() => {
+    const box = relabelBox.value
+    const dimensions = relabelImageDimensions.value
+    if (!box || !dimensions) return 'Click the first corner, then the opposite corner to draw the new box.'
+    return `0 ${(((box.x_min + box.x_max) / 2) / dimensions.width).toFixed(6)} ${(((box.y_min + box.y_max) / 2) / dimensions.height).toFixed(6)} ${((box.x_max - box.x_min) / dimensions.width).toFixed(6)} ${((box.y_max - box.y_min) / dimensions.height).toFixed(6)}`
+  })
+
   const correctionLabelPreview = computed(() => {
     const box = correctionBox.value
     const dimensions = correctionImageDimensions.value
@@ -268,7 +312,7 @@
     const requestedOffset = reset ? 0 : modelsOffset.value
 
     try {
-      const response = await fetch(`/models?limit=${modelsLimit}&offset=${requestedOffset}`)
+      const response = await fetch(`/models?limit=${modelsLimit}&offset=${requestedOffset}&order=${modelSortOrder.value}`)
       if (!response.ok) {
         throw new Error(`Models request failed with status ${response.status}`)
       }
@@ -277,11 +321,6 @@
       const runs = (data.runs || [])
         .map((run: ModelRun) => normalizeEpochMetrics(run))
         .map((run: ModelRun) => ({ ...run, epochs: [...run.epochs].sort((a, b) => b.epoch - a.epoch) }))
-        .sort((a: ModelRun, b: ModelRun) => {
-          const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
-          const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
-          return bTime - aTime
-        })
       modelRuns.value = reset ? runs : [...modelRuns.value, ...runs]
       modelsOffset.value = reset ? runs.length : modelsOffset.value + runs.length
       modelsTotal.value = data.total ?? modelsOffset.value
@@ -430,7 +469,11 @@
     error.value = ''
 
     try {
-      const query = new URLSearchParams({ limit: String(datasetImagesLimit), offset: String(requestedOffset) })
+      const query = new URLSearchParams({
+        limit: String(datasetImagesLimit),
+        offset: String(requestedOffset),
+        order: datasetSortOrder.value
+      })
       if (refresh) query.set('refresh', 'true')
       const response = await fetch(`/${split}-images?${query.toString()}`)
       if (!response.ok) {
@@ -438,11 +481,7 @@
       }
 
       const data = await response.json()
-      const page = (data.images || []).sort((a: DatasetImage, b: DatasetImage) => {
-        const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
-        const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
-        return bTime - aTime
-      })
+      const page = data.images || []
       datasetImages.value = append ? [...datasetImages.value, ...page] : page
       offset.value = append ? offset.value + page.length : page.length
       total.value = data.total ?? offset.value
@@ -568,6 +607,105 @@
         taskPollingInFlight.delete(guid)
       }
     }))
+  }
+
+  const openDatasetRelabel = (image: DatasetImage, split: 'training' | 'validation') => {
+    relabelImage.value = image
+    relabelImageName.value = image.name
+    relabelSplit.value = split
+    relabelImageDimensions.value = null
+    relabelBox.value = null
+    relabelAnchor.value = null
+    relabelCursor.value = null
+    relabelError.value = ''
+  }
+
+  const closeDatasetRelabel = (force = false) => {
+    if (isSavingRelabel.value && !force) return
+    relabelImage.value = null
+    relabelImageName.value = ''
+    relabelImageDimensions.value = null
+    relabelBox.value = null
+    relabelAnchor.value = null
+    relabelCursor.value = null
+    relabelError.value = ''
+  }
+
+  const onRelabelImageLoad = (event: Event) => {
+    const image = event.currentTarget as HTMLImageElement
+    relabelImageDimensions.value = { width: image.naturalWidth, height: image.naturalHeight }
+  }
+
+  const selectRelabelPoint = (event: PointerEvent) => {
+    const dimensions = relabelImageDimensions.value
+    if (!dimensions) return
+    const svg = event.currentTarget as SVGSVGElement
+    const bounds = svg.getBoundingClientRect()
+    const point = {
+      x: Math.max(0, Math.min(dimensions.width, ((event.clientX - bounds.left) / bounds.width) * dimensions.width)),
+      y: Math.max(0, Math.min(dimensions.height, ((event.clientY - bounds.top) / bounds.height) * dimensions.height))
+    }
+    if (!relabelAnchor.value) {
+      relabelAnchor.value = point
+      relabelCursor.value = point
+      relabelBox.value = null
+      relabelError.value = ''
+      return
+    }
+    const box = {
+      x_min: Math.min(relabelAnchor.value.x, point.x),
+      y_min: Math.min(relabelAnchor.value.y, point.y),
+      x_max: Math.max(relabelAnchor.value.x, point.x),
+      y_max: Math.max(relabelAnchor.value.y, point.y)
+    }
+    relabelAnchor.value = null
+    relabelCursor.value = null
+    if (box.x_max <= box.x_min || box.y_max <= box.y_min) {
+      relabelError.value = 'Select two different corners to create a positive-size box.'
+      return
+    }
+    relabelBox.value = box
+  }
+
+  const updateRelabelPoint = (event: PointerEvent) => {
+    if (!relabelAnchor.value || !relabelImageDimensions.value) return
+    const svg = event.currentTarget as SVGSVGElement
+    const bounds = svg.getBoundingClientRect()
+    relabelCursor.value = {
+      x: Math.max(0, Math.min(relabelImageDimensions.value.width, ((event.clientX - bounds.left) / bounds.width) * relabelImageDimensions.value.width)),
+      y: Math.max(0, Math.min(relabelImageDimensions.value.height, ((event.clientY - bounds.top) / bounds.height) * relabelImageDimensions.value.height))
+    }
+  }
+
+  const saveDatasetRelabel = async () => {
+    const image = relabelImage.value
+    if (!image) return
+    const box = relabelBox.value
+    isSavingRelabel.value = true
+    relabelError.value = ''
+    try {
+      const response = await fetch(`/dataset/${relabelSplit.value}/images/${encodeURIComponent(image.name)}/relabel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ corrected_box: box })
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.detail || `Relabel request failed with status ${response.status}`)
+      const datasetImages = relabelSplit.value === 'training' ? trainingImages : validationImages
+      datasetImages.value = datasetImages.value.map((datasetImage) => {
+        if (datasetImage.name !== image.name) return datasetImage
+        return {
+          ...datasetImage,
+          image_url: typeof result.image_url === 'string' ? result.image_url : datasetImage.image_url,
+          detection_count: typeof result.detection_count === 'number' ? result.detection_count : datasetImage.detection_count
+        }
+      })
+      closeDatasetRelabel(true)
+    } catch (err) {
+      relabelError.value = err instanceof Error ? err.message : 'Could not relabel this dataset image.'
+    } finally {
+      isSavingRelabel.value = false
+    }
   }
 
   const openCorrectionModal = (task: TaskInfo, image: InferenceImage) => {
@@ -1300,6 +1438,13 @@
               These boxes are drawn from the dataset’s ground-truth label files. They are not model predictions.
             </p>
           </div>
+          <label class="sort-control">
+            <span>Order</span>
+            <select v-model="datasetSortOrder" aria-label="Order dataset images" @change="changeDatasetSort">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+            </select>
+          </label>
         </div>
 
         <div v-if="isLoadingDatasetImages" class="validation-loading" role="status" aria-live="polite">
@@ -1321,7 +1466,7 @@
         </div>
 
         <div v-else class="validation-grid">
-          <article v-for="img in activeDatasetImages" :key="img.name" class="validation-card">
+          <article v-for="img in sortedActiveDatasetImages" :key="img.name" class="validation-card">
             <div class="validation-card__image">
               <img
                 :src="img.image_url"
@@ -1341,6 +1486,13 @@
                 <strong>{{ img.detection_count }}</strong>
                 {{ img.detection_count === 1 ? 'detection' : 'detections' }}
               </span>
+              <button
+                class="button button--secondary validation-card__relabel"
+                type="button"
+                @click="openDatasetRelabel(img, activeDatasetSplit)"
+              >
+                Relabel box
+              </button>
             </div>
           </article>
         </div>
@@ -1362,6 +1514,13 @@
             <h2 id="models-heading">Model runs</h2>
             <p class="section-description">Training and validation metrics for each saved run.</p>
           </div>
+          <label class="sort-control">
+            <span>Order</span>
+            <select v-model="modelSortOrder" aria-label="Order model runs" @change="changeModelSort">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+            </select>
+          </label>
         </div>
 
         <div v-if="isLoadingModels" class="validation-loading" role="status" aria-live="polite">
@@ -1383,11 +1542,21 @@
         </div>
 
         <div v-else class="model-run-list">
-          <article v-for="run in modelRuns" :key="run.name" class="model-run">
+          <article v-for="run in sortedModelRuns" :key="run.name" class="model-run">
             <header class="model-run__header">
               <div class="model-run__title-group">
                 <div class="model-run__title">
-                  <h3 :title="run.note || undefined">{{ run.name }}</h3>
+                  <h3>{{ run.name }}</h3>
+                  <span
+                    v-if="run.note"
+                    class="model-note-icon"
+                    tabindex="0"
+                    role="img"
+                    aria-label="Model note"
+                    :data-tooltip="run.note"
+                  >
+                    📝
+                  </span>
                   <span v-if="getBestEpochNumber(run) !== null" class="model-run__best">
                     Best - Epoch {{ getBestEpochNumber(run) }}
                   </span>
@@ -1489,10 +1658,20 @@
           No saved models are cached yet. Check the Models tab or retry loading the model list.
         </div>
         <div v-else class="model-picker__runs">
-          <article v-for="run in modelRuns" :key="run.name" class="model-picker__run">
+          <article v-for="run in sortedModelRuns" :key="run.name" class="model-picker__run">
             <div class="model-picker__run-heading">
               <div class="model-run__title">
-                <h3 :title="run.note || undefined">{{ run.name }}</h3>
+                <h3>{{ run.name }}</h3>
+                <span
+                  v-if="run.note"
+                  class="model-note-icon"
+                  tabindex="0"
+                  role="img"
+                  aria-label="Model note"
+                  :data-tooltip="run.note"
+                >
+                  📝
+                </span>
                 <span v-if="getBestEpochNumber(run) !== null" class="model-run__best">
                   Best - Epoch {{ getBestEpochNumber(run) }}
                 </span>
@@ -1617,6 +1796,112 @@
             </svg>
           </article>
         </div>
+      </section>
+    </div>
+
+    <div
+      v-if="relabelImage"
+      class="correction-modal-backdrop"
+      role="presentation"
+      @click.self="closeDatasetRelabel()"
+    >
+      <section
+        class="correction-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="relabel-modal-heading"
+      >
+        <header class="correction-modal__header">
+          <div>
+            <p class="eyebrow">RELABEL DATASET IMAGE</p>
+            <h2 id="relabel-modal-heading">Replace the bounding box</h2>
+            <p class="section-description">
+              Existing labels are shown in red. Click two corners to draw the replacement label in blue.
+            </p>
+          </div>
+          <button
+            class="model-picker__close"
+            type="button"
+            aria-label="Close relabel dialog"
+            :disabled="isSavingRelabel"
+            @click="closeDatasetRelabel()"
+          >
+            ×
+          </button>
+        </header>
+
+        <div class="correction-modal__body">
+          <div
+            class="correction-canvas"
+            :style="relabelImageDimensions
+              ? { aspectRatio: `${relabelImageDimensions.width} / ${relabelImageDimensions.height}` }
+              : undefined"
+          >
+            <img
+              :src="relabelImage.image_url"
+              :alt="`Relabel ${relabelImage.name}`"
+              @load="onRelabelImageLoad"
+              @error="relabelError = 'Could not load this dataset image.'"
+            />
+            <svg
+              v-if="relabelImageDimensions"
+              class="correction-canvas__overlay"
+              :viewBox="`0 0 ${relabelImageDimensions.width} ${relabelImageDimensions.height}`"
+              preserveAspectRatio="none"
+              role="presentation"
+              @pointerup="selectRelabelPoint"
+              @pointermove="updateRelabelPoint"
+            >
+              <rect
+                v-if="relabelOverlayBox && relabelOverlayBox.width > 0 && relabelOverlayBox.height > 0"
+                :x="relabelOverlayBox.x"
+                :y="relabelOverlayBox.y"
+                :width="relabelOverlayBox.width"
+                :height="relabelOverlayBox.height"
+                class="correction-canvas__box"
+              />
+            </svg>
+          </div>
+          <div class="correction-label">
+            <strong>{{ relabelSplit === 'training' ? 'YOLO training' : 'YOLO validation' }} label (class x_center y_center width height)</strong>
+            <code>{{ relabelLabelPreview }}</code>
+          </div>
+          <p v-if="relabelError" class="correction-modal__error" role="alert">{{ relabelError }}</p>
+        </div>
+        <footer class="correction-modal__footer">
+          <button
+            class="button button--secondary"
+            type="button"
+            :disabled="isSavingRelabel"
+            @click="closeDatasetRelabel()"
+          >
+            Cancel
+          </button>
+          <button
+            class="button button--secondary"
+            type="button"
+            :disabled="isSavingRelabel"
+            @click="relabelBox = null; relabelAnchor = null; relabelCursor = null; relabelError = ''"
+          >
+            Redraw box
+          </button>
+          <button
+            class="button button--secondary"
+            type="button"
+            :disabled="isSavingRelabel"
+            @click="relabelBox = null; relabelAnchor = null; relabelCursor = null; saveDatasetRelabel()"
+          >
+            Accept no detections
+          </button>
+          <button
+            class="button button--primary"
+            type="button"
+            :disabled="!relabelBox || isSavingRelabel"
+            @click="saveDatasetRelabel()"
+          >
+            {{ isSavingRelabel ? 'Saving…' : 'Save relabel' }}
+          </button>
+        </footer>
       </section>
     </div>
 

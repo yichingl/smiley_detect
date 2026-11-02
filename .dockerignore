@@ -1,0 +1,13 @@
+**/.git
+**/.venv
+**/venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+frontend/dist
+uploaded_images
+saved_models
+dataset
+smiley_app.db
+data
+*.log

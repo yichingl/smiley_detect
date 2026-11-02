@@ -1,6 +1,6 @@
 SHELL := powershell.exe
 
-.PHONY: venv install run worker db-refresh db-upgrade redis-local dev docker-up docker-down clean train train-yolo
+.PHONY: venv install run worker db-refresh db-upgrade redis-local dev docker-up docker-update docker-down clean train train-yolo
 
 API_HOST ?= 127.0.0.1
 API_PORT ?= 8000
@@ -43,8 +43,14 @@ dev: redis-local
 # Containerized stack orchestration using Docker Compose
 docker-down:
 	docker compose down
-docker-up:
+docker-up: # run this for redis/docker compose changes, network changes, new services, or compose volume changes
 	docker compose up --build
+
+# Update the API and worker images while reusing Docker's cached build layers.
+docker-update:
+	docker compose up -d redis
+	docker compose build web worker
+	docker compose up -d --no-deps web worker
 
 clean:
 	rm -rf __pycache__
@@ -61,4 +67,4 @@ train:
 		--output-path saved_models/smiley_v1.pkl
 
 train-yolo:
-	.\venv\Scripts\python -m app.training.train_yolo --epochs 8
+	.\venv\Scripts\python -m app.training.train_yolo --epochs 20

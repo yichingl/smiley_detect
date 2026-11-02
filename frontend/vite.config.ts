@@ -16,11 +16,17 @@ export default defineConfig({
         bypass: (req: IncomingMessage) => {
           if (!req.url) return
 
-          // 1. Always let FastAPI handle backend-served image paths.
+          // 1. Always let FastAPI handle backend routes and image paths.
           if (
+            req.url.startsWith('/dataset/') ||
             req.url.startsWith('/uploaded_images/') ||
             req.url.startsWith('/validation-cache/') ||
-            req.url.startsWith('/training-cache/')
+            req.url.startsWith('/training-cache/') ||
+            req.url.startsWith('/tasks/') ||
+            req.url.startsWith('/images/') ||
+            req.url.startsWith('/models') ||
+            req.url.startsWith('/validation-images') ||
+            req.url.startsWith('/training-images')
           ) {
             return undefined // Do not bypass -> send to FastAPI
           }
@@ -29,7 +35,9 @@ export default defineConfig({
           if (
             req.url.startsWith('/src/') ||
             req.url.startsWith('/@') ||
-            req.url.includes('.') ||
+            req.url.startsWith('/node_modules/') ||
+            req.url.startsWith('/favicon.svg') ||
+            req.url.startsWith('/favicon.ico') ||
             req.headers.accept?.includes('text/html')
           ) {
             return req.url // Bypass proxy, serve locally via Vite

@@ -18,7 +18,9 @@ RUN apt-get update && apt-get install -y \
 
 # 5. Dependencies: Copy requirements first to leverage Docker's caching layer
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchvision==0.20.1 && \
+    pip install --no-cache-dir -r requirements.txt
 
 # 6. Project Code: Copy the rest of your application code into the container
 COPY . .
